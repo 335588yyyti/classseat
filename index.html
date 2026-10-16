@@ -42,6 +42,15 @@
         <button class="btn" id="btnSortNo">依座號排序</button>
       </div>
       <p class="stats" id="studentStats"></p>
+      <div class="gender-batch">
+        <span class="gb-title">批次設定性別</span>
+        <span class="gb-range">座號 <input type="number" id="gbFrom" min="1" aria-label="起始座號"> 到 <input type="number" id="gbTo" min="1" aria-label="結束座號"> 號設為
+          <button class="btn small" data-gb="M">男</button><button class="btn small" data-gb="F">女</button><button class="btn small" data-gb="">清除</button></span>
+        <span class="gb-quick">一鍵：
+          <button class="btn small" data-gb-quick="oddM">單號男、雙號女</button>
+          <button class="btn small" data-gb-quick="oddF">單號女、雙號男</button>
+          <button class="btn small" data-gb-quick="clear">全部清除</button></span>
+      </div>
     </section>
 
     <section class="card">

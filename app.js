@@ -573,6 +573,8 @@ function evaluate() {
 
 function renderStudentsPanel() {
   $('#countInput').value = state.students.length;
+  if (!$('#gbFrom').value) $('#gbFrom').value = 1;
+  if (!$('#gbTo').value) $('#gbTo').value = Math.floor(state.students.length / 2);
   renderStats();
   renderConditions();
   renderTable();
@@ -844,6 +846,44 @@ function bindStudentsPanel() {
   });
   $('#btnAddStudent').addEventListener('click', () => addStudent());
   $('#btnSortNo').addEventListener('click', () => { state.students = sortedStudents(); renderTable(); save(); });
+
+  // 批次設定性別：座號範圍，或依單雙號一鍵設定
+  const applyGender = (pick, msg) => {
+    let n = 0;
+    for (const st of state.students) {
+      const g = pick(Number(st.no));
+      if (g === undefined) continue;
+      st.gender = g;
+      n++;
+    }
+    renderTable(); renderStats(); save();
+    toast(msg(n));
+  };
+  $('.gender-batch').addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    if (btn.dataset.gbQuick) {
+      const q = btn.dataset.gbQuick;
+      if (q === 'clear') {
+        if (!confirm('清除所有學生的性別？')) return;
+        applyGender(() => '', () => '已清除全部性別');
+      } else {
+        const odd = q === 'oddM' ? 'M' : 'F', even = odd === 'M' ? 'F' : 'M';
+        applyGender((no) => (no > 0 ? (no % 2 ? odd : even) : undefined), (n) => `已設定 ${n} 人：單號${odd === 'M' ? '男' : '女'}、雙號${even === 'M' ? '男' : '女'}`);
+      }
+      return;
+    }
+    if (!('gb' in btn.dataset)) return;
+    const from = Number($('#gbFrom').value), to = Number($('#gbTo').value);
+    if (!from || !to) { toast('請填寫座號範圍'); return; }
+    const lo = Math.min(from, to), hi = Math.max(from, to);
+    const g = btn.dataset.gb;
+    applyGender((no) => (no >= lo && no <= hi ? g : undefined),
+      (n) => `${lo}～${hi} 號共 ${n} 人${g ? `設為${g === 'M' ? '男' : '女'}` : '已清除性別'}`);
+    // 方便接著設定下一段：起始座號跳到下一號
+    const maxNo = Math.max(0, ...state.students.map((st) => Number(st.no) || 0));
+    if (hi < maxNo) { $('#gbFrom').value = hi + 1; $('#gbTo').value = maxNo; }
+  });
 
   $('#btnBatch').addEventListener('click', () => { $('#batchText').value = ''; $('#batchDialog').showModal(); });
   $('#batchDialog').addEventListener('close', () => {
