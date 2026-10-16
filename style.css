@@ -169,7 +169,7 @@ tr.rule-row td { padding: 4px 6px 14px 40px; border-top: 0; }
 .desk {
   position: absolute; width: 104px; height: 60px; border-radius: 7px;
   background: var(--desk); border: 1.5px solid var(--desk-line); border-left-width: 5px;
-  display: flex; flex-direction: column; justify-content: center; padding: 3px 6px 3px 7px;
+  display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 11px 5px 2px;
   cursor: grab; user-select: none; touch-action: none; transition: box-shadow .12s, transform .12s;
 }
 .desk:hover { box-shadow: 0 2px 8px rgba(0,0,0,.12); }
@@ -177,10 +177,10 @@ tr.rule-row td { padding: 4px 6px 14px 40px; border-top: 0; }
 .desk.g-F { border-left-color: var(--girl); }
 .desk.empty { background: repeating-linear-gradient(45deg, #fafafa, #fafafa 6px, #f2f2f2 6px, #f2f2f2 12px); border-style: dashed; color: #9ca3af; align-items: center; cursor: default; }
 .room.move-mode .desk { cursor: move; }
-.desk .d-top { display: flex; align-items: baseline; gap: 5px; min-width: 0; }
-.desk .d-no { font-size: 11px; color: var(--muted); }
-.desk .d-name { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.desk .d-badges { display: flex; gap: 3px; align-items: center; margin-top: 2px; font-size: 11px; color: var(--muted); min-height: 15px; overflow: hidden; }
+.desk .d-no { position: absolute; top: 2px; left: 5px; font-size: 11px; line-height: 1; color: var(--muted); }
+.desk .d-name { display: block; width: 100%; text-align: center; font-weight: 700; font-size: 20px; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.desk .d-badges { display: flex; justify-content: center; gap: 3px; align-items: center; margin-top: 1px; font-size: 11px; line-height: 1; color: var(--muted); overflow: hidden; }
+.desk .d-empty { font-size: 14px; }
 .desk .d-tag { width: 15px; height: 15px; border-radius: 4px; color: #fff; font-size: 10px; display: inline-flex; align-items: center; justify-content: center; flex: none; }
 .desk .lock {
   position: absolute; top: 1px; right: 1px; border: 0; background: none; cursor: pointer;
@@ -188,7 +188,9 @@ tr.rule-row td { padding: 4px 6px 14px 40px; border-top: 0; }
 }
 .desk:hover .lock, .desk.locked .lock { opacity: 1; }
 .desk.locked { background: #f1f5f9; }
-.desk .del { position: absolute; top: -9px; right: -9px; width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--line); background: #fff; cursor: pointer; font-size: 12px; line-height: 1; padding: 0; color: var(--danger); }
+.desk:hover .del { opacity: 1; }
+
+.desk .del { position: absolute; top: -9px; left: -9px; opacity: 0; z-index: 2; width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--line); background: #fff; cursor: pointer; font-size: 12px; line-height: 1; padding: 0; color: var(--danger); }
 .desk.conflict { box-shadow: 0 0 0 3px var(--danger); }
 .desk.warnd { box-shadow: 0 0 0 2px #e5b93a; }
 .desk.selected { box-shadow: 0 0 0 3px var(--accent); }
