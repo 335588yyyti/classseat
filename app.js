@@ -15,7 +15,21 @@ const WEIGHT_LABEL = { 1: '低', 2: '中', 3: '高' };
 const TAG_COLORS = ['#7c3aed', '#0891b2', '#ea580c', '#16a34a', '#db2777', '#4f46e5', '#ca8a04', '#64748b'];
 const STRATEGY_LABEL = { front: '盡量前排', back: '盡量後排', spread: '彼此分散', none: '僅標示' };
 const PREF_LABEL = { any: '不限', front: '盡量前排', back: '盡量後排' };
-const LAYOUT_LABEL = { rows: '直排', groups: '分組', u: 'ㄇ字型' };
+const LAYOUT_LABEL = { rows: '直排', groups: '分組', u: 'ㄇ字型', custom: '自訂' };
+
+// 自訂版型的預設值：依班上座位圖（黑板在上方，共 27 個座位、5 組）
+const CLASS_LAYOUT = [
+  // 第 1 組：左前方兩欄
+  [0, 0, 'G1'], [112, 0, 'G1'], [0, 80, 'G1'], [112, 80, 'G1'], [0, 160, 'G1'], [112, 160, 'G1'], [0, 240, 'G1'],
+  // 第 2 組：中間前方三角形（前 3、中 2、後 1）
+  [330, 0, 'G2'], [442, 0, 'G2'], [554, 0, 'G2'], [386, 90, 'G2'], [498, 90, 'G2'], [442, 180, 'G2'],
+  // 第 3 組：右邊六角形
+  [790, 90, 'G3'], [734, 170, 'G3'], [846, 170, 'G3'], [734, 250, 'G3'], [846, 250, 'G3'], [790, 330, 'G3'],
+  // 第 4 組：左後方 2×2
+  [56, 360, 'G4'], [168, 360, 'G4'], [56, 440, 'G4'], [168, 440, 'G4'],
+  // 第 5 組：中間後方 2×2
+  [400, 360, 'G5'], [512, 360, 'G5'], [400, 440, 'G5'], [512, 440, 'G5'],
+].map(([x, y, group]) => ({ x, y, group }));
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -45,7 +59,8 @@ function defaultState() {
       height: { on: true, weight: 2 },
       gender: { on: true, weight: 1 },
     },
-    layout: { type: 'rows', cols: 6, paired: true, groups: 6 },
+    layout: { type: 'custom', cols: 6, paired: true, groups: 6 },
+    customLayout: CLASS_LAYOUT.map((p) => ({ ...p })),
     seats: [],
     assign: {}, // seatId -> studentId
     locked: [], // studentIds
@@ -77,6 +92,8 @@ function normalize(data) {
   s.tags = Array.isArray(data.tags) ? data.tags : d.tags;
   s.students = data.students.map((st, i) => ({ ...newStudent(i + 1), ...st }));
   s.seats = Array.isArray(data.seats) ? data.seats : [];
+  s.customLayout = Array.isArray(data.customLayout) && data.customLayout.length ? data.customLayout : d.customLayout;
+  if (!data.layout) s.layout.type = 'rows';
   s.assign = data.assign && typeof data.assign === 'object' ? data.assign : {};
   s.locked = Array.isArray(data.locked) ? data.locked : [];
   return s;
@@ -102,7 +119,7 @@ function toast(msg) {
 }
 
 function pushHistory() {
-  ui.history.push(JSON.stringify({ seats: state.seats, assign: state.assign, locked: state.locked, layout: state.layout, custom: state.custom }));
+  ui.history.push(JSON.stringify({ seats: state.seats, assign: state.assign, locked: state.locked, layout: state.layout, custom: state.custom, customLayout: state.customLayout }));
   if (ui.history.length > 30) ui.history.shift();
 }
 
@@ -148,6 +165,14 @@ function generateSeats(n, layout) {
       for (let k = 0; k < size; k++) {
         add(gx0 + (k % 2) * (DESK_W + 4), gy0 + Math.floor(k / 2) * (DESK_H + 4), 'G' + (g + 1));
       }
+    }
+  } else if (layout.type === 'custom') {
+    const tpl = state.customLayout;
+    tpl.forEach((p) => add(p.x, p.y, p.group));
+    // 學生比自訂座位多時，在最後面補一排桌子
+    const maxY = Math.max(...tpl.map((p) => p.y));
+    for (let i = 0; i < n - tpl.length; i++) {
+      add((i % 8) * (DESK_W + 14), maxY + (DESK_H + 26) * (1 + Math.floor(i / 8)), null);
     }
   } else {
     return uShape(n);
@@ -272,7 +297,7 @@ function geometry(seats = state.seats) {
       }
     }
   }
-  const isGroups = state.layout.type === 'groups';
+  const isGroups = state.layout.type === 'groups' || (state.layout.type === 'custom' && seats.some((s) => s.group));
   const groupKeys = [...new Set(seats.map((s) => s.group).filter(Boolean))];
   const groupIdx = seats.map((s) => (s.group ? groupKeys.indexOf(s.group) : -1));
   const sameGroup = (a, b) =>
@@ -859,9 +884,12 @@ function renderLayoutOpts() {
   } else if (L.type === 'groups') {
     html = `<label>分成 <input type="number" min="3" max="10" value="${L.groups}" data-lo="groups"> 組</label>
       <span class="hint">每組 ${Math.ceil(n / L.groups)} 人以內</span>`;
+  } else if (L.type === 'custom') {
+    html = `<span class="hint">${state.customLayout.length} 個座位；切到「拖曳：移動桌椅」可調整，位置會自動記住</span>`;
   } else {
     html = `<span class="hint">${n > 24 ? '內外雙層 ㄇ 字型' : '單層 ㄇ 字型'}，開口朝向講台</span>`;
   }
+  if (state.custom) html += '<button class="btn small" data-save-custom>把目前桌椅存成自訂版型</button>';
   $('#layoutOpts').innerHTML = html;
 }
 
@@ -909,7 +937,7 @@ function renderRoom() {
   const podiumY = state.flipped ? H - pad - 40 : pad - 10;
   let html = `<div class="podium" style="left:${(W - pw) / 2}px;top:${podiumY}px;width:${pw}px">講 台</div>`;
 
-  if (state.layout.type === 'groups') {
+  if (state.layout.type === 'groups' || state.layout.type === 'custom') {
     const groups = {};
     state.seats.forEach((s) => {
       if (!s.group) return;
@@ -1009,6 +1037,14 @@ function swapSeats(a, b) {
   renderSeatsPanel();
 }
 
+function markDesksEdited() {
+  if (state.layout.type === 'custom') {
+    state.customLayout = state.seats.map(({ x, y, group }) => ({ x, y, group }));
+  } else {
+    state.custom = true;
+  }
+}
+
 function changeLayout(mutator) {
   if (state.custom && !confirm('切換或調整版型會重設你手動移動過的桌椅位置，確定嗎？')) { renderSeatsPanel(); return; }
   pushHistory();
@@ -1024,6 +1060,17 @@ function bindSeatsPanel() {
     if (!t || (t === state.layout.type && !state.custom)) return;
     changeLayout((L) => { L.type = t; });
     toast(`已切換為${LAYOUT_LABEL[t]}，可按「依條件自動排座」重新安排`);
+  });
+  $('#layoutOpts').addEventListener('click', (e) => {
+    if (!e.target.closest('[data-save-custom]')) return;
+    if (!confirm('用目前的桌椅位置取代「自訂」版型？')) return;
+    pushHistory();
+    state.layout.type = 'custom';
+    state.custom = false;
+    markDesksEdited();
+    save();
+    renderSeatsPanel();
+    toast('已存成自訂版型');
   });
   $('#layoutOpts').addEventListener('change', (e) => {
     const k = e.target.dataset.lo;
@@ -1076,7 +1123,7 @@ function bindSeatsPanel() {
     const last = state.seats.filter((s) => s.y === b.maxY);
     const x = last.length ? Math.max(...last.map((s) => s.x)) + DESK_W + 14 : b.minX;
     state.seats.push({ id: uid(), x, y: b.maxY, group: null });
-    state.custom = true;
+    markDesksEdited();
     save(); renderSeatsPanel();
   });
 
@@ -1092,7 +1139,7 @@ function bindSeatsPanel() {
       if (state.assign[desk.dataset.seat]) return;
       pushHistory();
       state.seats = state.seats.filter((s) => s.id !== desk.dataset.seat);
-      state.custom = true;
+      markDesksEdited();
       save(); renderSeatsPanel();
     }
   });
@@ -1161,7 +1208,7 @@ function bindSeatsPanel() {
       pushHistory();
       seat.x = Math.round((seat.x + dx) / 8) * 8;
       seat.y = Math.round((seat.y + dy) / 8) * 8;
-      state.custom = true;
+      markDesksEdited();
       save();
       renderSeatsPanel();
     }
