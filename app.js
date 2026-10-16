@@ -545,31 +545,27 @@ function renderStats() {
 }
 
 function weightSelect(value, attrs) {
-  return `<select ${attrs} aria-label="重要程度">${[1, 2, 3].map((w) => `<option value="${w}" ${+value === w ? 'selected' : ''}>重要程度：${WEIGHT_LABEL[w]}</option>`).join('')}</select>`;
+  return `<select class="w-sel" ${attrs} aria-label="重要程度" title="重要程度">${[1, 2, 3].map((w) => `<option value="${w}" ${+value === w ? 'selected' : ''}>重要：${WEIGHT_LABEL[w]}</option>`).join('')}</select>`;
 }
 
 function renderConditions() {
   const c = state.conditions;
   const defs = [
-    ['myopia', '👓 視力', '近視的同學優先安排在前排'],
-    ['height', '📏 身高', '矮的同學坐前面、高的坐後面（需填身高）'],
-    ['gender', '⚥ 性別', '直排／ㄇ字型：左右男女交錯；分組：各組男女人數平均'],
+    ['myopia', '👓 視力', '近視坐前排', '近視的同學優先安排在前排'],
+    ['height', '📏 身高', '矮前高後', '矮的同學坐前面、高的坐後面（需填身高）'],
+    ['gender', '⚥ 性別', '男女交錯', '直排／ㄇ字型：左右男女交錯；分組：各組男女人數平均'],
   ];
-  $('#builtinConds').innerHTML = defs.map(([k, title, desc]) => `
-    <div class="cond ${c[k].on ? '' : 'off'}">
-      <input type="checkbox" data-cond="${k}" ${c[k].on ? 'checked' : ''} aria-label="${title}">
-      <div class="cond-text">
-        <div class="cond-title">${title}</div>
-        <div class="cond-desc">${desc}</div>
-      </div>
+  $('#builtinConds').innerHTML = defs.map(([k, title, short, desc]) => `
+    <div class="cond ${c[k].on ? '' : 'off'}" title="${desc}">
+      <label class="cond-text">
+        <input type="checkbox" data-cond="${k}" ${c[k].on ? 'checked' : ''}>
+        <span class="cond-title">${title}</span>
+        <span class="cond-desc">${short}</span>
+      </label>
       ${weightSelect(c[k].weight, `data-cond-w="${k}"`)}
     </div>`).join('') + `
-    <div class="cond">
-      <input type="checkbox" checked disabled aria-label="個人規則">
-      <div class="cond-text">
-        <div class="cond-title">🤝 個人規則</div>
-        <div class="cond-desc">不可相鄰、不可同組最優先；其次是盡量同組與座位偏好（在學生的「規則」中設定）</div>
-      </div>
+    <div class="cond fixed" title="不可相鄰、不可同組最優先；其次是盡量同組與座位偏好（在學生的「規則」中設定）">
+      <span class="cond-text"><span class="cond-title">🤝 個人規則</span><span class="cond-desc">一律優先</span></span>
     </div>`;
 
   const box = $('#customConds');

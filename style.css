@@ -87,19 +87,24 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft
 .stepper input { width: 70px; text-align: center; }
 
 /* ---------- conditions ---------- */
-.cond-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.cond-grid { display: flex; flex-wrap: wrap; gap: 8px; }
 .cond {
-  display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px;
-  border: 1px solid var(--line); border-radius: 9px;
+  display: inline-flex; align-items: center; gap: 8px; padding: 4px 4px 4px 10px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--card);
 }
+.cond.fixed { padding-right: 10px; background: var(--field); }
 .cond.off { opacity: .55; }
-.cond .cond-text { flex: 1; }
-.cond .cond-title { font-weight: 600; }
-.cond .cond-desc { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
-.cond input[type=checkbox] { margin-top: 4px; width: 16px; height: 16px; }
-.custom-conds { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.cond .cond-text { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; white-space: nowrap; }
+.cond.fixed .cond-text { cursor: default; }
+.cond .cond-title { font-weight: 600; font-size: 14px; }
+.cond .cond-desc { color: var(--muted); font-size: 12.5px; }
+.cond input[type=checkbox] { margin: 0; width: 15px; height: 15px; accent-color: var(--accent); }
+select.w-sel { padding: 2px 6px; font-size: 13px; }
+.custom-conds { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
 .tag-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.tag-row input[type=text] { width: 11em; }
+.tag-row input[type=text] { width: 9em; }
+.tag-row input[type=text], .tag-row select { padding: 3px 8px; font-size: 13.5px; }
+.tag-row .link-btn { font-size: 13px; }
 .tag-dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
 .empty-note { color: var(--muted); font-size: 13px; margin: 0; }
 
