@@ -79,6 +79,18 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft
 .seg { display: inline-flex; background: var(--field); border-radius: 9px; padding: 3px; gap: 2px; }
 .seg button { border: 0; background: transparent; padding: 6px 14px; border-radius: 7px; cursor: pointer; color: #4b5563; }
 .seg button.active { background: var(--card); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.1); }
+.seg { flex-wrap: wrap; }
+.seg .seg-sep { width: 1px; background: #d4d7dc; margin: 4px; }
+.seg .map-btn { display: inline-flex; align-items: center; gap: 4px; padding-right: 6px; }
+.seg .map-del { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; color: var(--muted); font-size: 13px; }
+.seg .map-del:hover { background: var(--danger-soft); color: var(--danger); }
+.seg .new-map { color: var(--accent); }
+.map-name { width: 9em; padding: 4px 8px; }
+.dlg-field { display: flex; flex-direction: column; gap: 8px; font-size: 14px; border: 0; padding: 0; margin: 0; }
+.dlg-field legend { color: #4b5563; margin-bottom: 6px; padding: 0; }
+.dlg-field input[type=text] { padding: 6px 10px; }
+.dlg-field input[type=number] { width: 60px; padding: 2px 6px; }
+.dlg-field label { display: inline-flex; align-items: center; gap: 6px; }
 .seg.small button { padding: 4px 10px; font-size: 13px; }
 
 /* ---------- count ---------- */
@@ -183,7 +195,7 @@ tr.rule-row td { padding: 4px 6px 14px 40px; border-top: 0; }
 .desk .d-empty { font-size: 14px; }
 .desk .d-grp { position: absolute; right: 4px; bottom: 2px; font-size: 10px; line-height: 1; color: var(--accent); font-weight: 600; }
 .edit-tools { align-items: center; }
-.grp-pick { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #4b5563; }
+.grp-pick { white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #4b5563; }
 .grp-pick select, .seat-grp select { font-size: 13px; padding: 3px 8px; }
 .seat-grp { margin: 10px 0 4px; padding: 8px 10px; background: var(--accent-soft); border-radius: 8px; font-size: 13.5px; }
 .desk .d-tag { width: 15px; height: 15px; border-radius: 4px; color: #fff; font-size: 10px; display: inline-flex; align-items: center; justify-content: center; flex: none; }

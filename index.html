@@ -80,11 +80,6 @@
     <section class="card toolbar-card">
       <div class="tool-row">
         <div class="seg" id="layoutSeg" role="radiogroup" aria-label="座位型式">
-          <button data-layout="rows">直排</button>
-          <button data-layout="groups">分組</button>
-          <button data-layout="u">ㄇ字型</button>
-          <button data-layout="custom">本班</button>
-          <button data-layout="free">自訂</button>
         </div>
         <div class="layout-opts" id="layoutOpts"></div>
         <span class="spacer"></span>
@@ -144,6 +139,24 @@
       <div class="dlg-actions">
         <button class="btn" value="cancel">取消</button>
         <button class="btn primary" id="batchOk" value="ok">取代名單</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="mapDialog">
+    <form method="dialog" class="dlg">
+      <h2>新增座位圖</h2>
+      <label class="dlg-field">名稱 <input type="text" id="mapName" placeholder="例：段考、分組討論"></label>
+      <fieldset class="dlg-field">
+        <legend>從哪種排法開始（共 <span id="mapCount"></span> 人，之後都能自由增減、拖動座位）</legend>
+        <label><input type="radio" name="mapStart" value="rows"> 直排，每排 <input type="number" id="mapCols" min="3" max="10"> 張</label>
+        <label><input type="radio" name="mapStart" value="groups"> 分組，分成 <input type="number" id="mapGroups" min="3" max="10"> 組</label>
+        <label><input type="radio" name="mapStart" value="u"> ㄇ字型</label>
+        <label><input type="radio" name="mapStart" value="copy"> 複製目前畫面上的座位</label>
+      </fieldset>
+      <div class="dlg-actions">
+        <button class="btn" value="cancel">取消</button>
+        <button class="btn primary" value="ok">新增</button>
       </div>
     </form>
   </dialog>
