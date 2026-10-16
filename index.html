@@ -59,7 +59,7 @@
         <span class="hint">自動排座時會依「重要程度」綜合考量；可自行新增或刪除條件</span>
       </div>
       <div class="cond-grid" id="builtinConds"></div>
-      <h3 class="sub">自訂條件 <span class="hint">（在每位學生的「規則」中勾選套用）</span></h3>
+      <h3 class="sub">自訂條件 <span class="hint">（在學生卡片的「條件設定」中套用）</span></h3>
       <div id="customConds" class="custom-conds"></div>
       <button class="btn" id="btnAddTag">＋ 新增條件</button>
     </section>
@@ -67,19 +67,9 @@
     <section class="card">
       <div class="card-head">
         <h2>學生名單</h2>
-        <span class="hint">點「規則」設定相鄰／同組限制、座位偏好與自訂條件</span>
+        <span class="hint">每張卡片可直接編輯；按「條件設定」設定同學關係、座位位置與自訂條件</span>
       </div>
-      <div class="table-wrap">
-        <table class="stu-table">
-          <thead>
-            <tr>
-              <th class="c-no">座號</th><th class="c-name">姓名</th><th class="c-gender">性別</th>
-              <th class="c-myo">近視</th><th class="c-h">身高</th><th>備註</th><th></th><th></th>
-            </tr>
-          </thead>
-          <tbody id="stuBody"></tbody>
-        </table>
-      </div>
+      <div class="stu-grid" id="stuGrid"></div>
       <button class="btn" id="btnAddStudent">＋ 新增學生</button>
     </section>
   </main>
@@ -168,6 +158,16 @@
         <button class="btn primary" value="ok">新增</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog id="ruleDialog" class="rule-dlg">
+    <div class="dlg">
+      <div class="rd-head">
+        <h2 id="rdTitle"></h2>
+        <button class="btn primary" id="rdClose">完成</button>
+      </div>
+      <div id="rdBody" class="rd-body"></div>
+    </div>
   </dialog>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
