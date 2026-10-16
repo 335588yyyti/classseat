@@ -15,6 +15,7 @@ const WEIGHT_LABEL = { 1: '低', 2: '中', 3: '高' };
 const TAG_COLORS = ['#7c3aed', '#0891b2', '#ea580c', '#16a34a', '#db2777', '#4f46e5', '#ca8a04', '#64748b'];
 const STRATEGY_LABEL = { front: '盡量前排', back: '盡量後排', spread: '彼此分散', none: '僅標示' };
 const PREF_LABEL = { any: '不限', front: '盡量前排', back: '盡量後排' };
+const HPREF_LABEL = { any: '不限', outer: '盡量外側', center: '盡量中間' };
 const LAYOUT_LABEL = { rows: '直排', groups: '分組', u: 'ㄇ字型' };
 // 座位圖（type: 'map'）：自己存的桌椅位置，可以有很多張，例如「本班」「段考」
 const isTemplate = (type = state.layout.type) => type === 'map';
@@ -46,7 +47,7 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 function newStudent(no) {
   return {
     id: uid(), no, name: '學生' + no, gender: '', myopia: false, height: '', note: '',
-    tags: [], avoidAdj: [], avoidGroup: [], preferGroup: [], pref: 'any',
+    tags: [], avoidAdj: [], avoidGroup: [], preferGroup: [], pref: 'any', hpref: 'any',
   };
 }
 
@@ -302,6 +303,11 @@ function geometry(seats = state.seats) {
   const ys = seats.map((s) => s.y);
   const minY = Math.min(...ys), maxY = Math.max(...ys);
   const front = seats.map((s) => (maxY === minY ? 0 : (s.y - minY) / (maxY - minY)));
+  // 左右：0＝最中間，1＝最外側（左右兩邊）
+  const xs = seats.map((s) => s.x);
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+  const half = (Math.max(...xs) - Math.min(...xs)) / 2;
+  const side = seats.map((s) => (half ? Math.abs(s.x - cx) / half : 0));
   const adj = new Uint8Array(N * N);
   const adjPairs = [];
   const rowPairs = [];
@@ -321,7 +327,7 @@ function geometry(seats = state.seats) {
   const groupIdx = seats.map((s) => (s.group ? groupKeys.indexOf(s.group) : -1));
   const sameGroup = (a, b) =>
     (groupIdx[a] >= 0 && groupIdx[a] === groupIdx[b]) || (!isGroups && adj[a * N + b] === 1);
-  return { N, front, adj, adjPairs, rowPairs, isGroups, groupIdx, groupCount: groupKeys.length, sameGroup };
+  return { N, front, side, adj, adjPairs, rowPairs, isGroups, groupIdx, groupCount: groupKeys.length, sameGroup };
 }
 
 /* =========================================================
@@ -368,6 +374,7 @@ function buildModel() {
       if (members.length > 1) spreadTags.push({ w, set: new Set(members) });
     }
   });
+  const sidePull = new Float64Array(studs.length);
   studs.forEach((s, i) => {
     let p = 0;
     if (s.pref === 'front') p += 5;
@@ -381,15 +388,19 @@ function buildModel() {
       if (t.strategy === 'back') p -= w;
     }
     frontPull[i] = p;
+    sidePull[i] = s.hpref === 'outer' ? 5 : s.hpref === 'center' ? -5 : 0;
   });
   const gender = studs.map((s) => s.gender || '');
 
   function cost(occ, pos) {
     let t = 0;
-    const { front, adj, N, sameGroup, adjPairs, rowPairs, isGroups, groupIdx, groupCount } = geo;
+    const { front, side, adj, N, sameGroup, adjPairs, rowPairs, isGroups, groupIdx, groupCount } = geo;
     for (let i = 0; i < studs.length; i++) {
       const f = front[pos[i]];
       const p = frontPull[i];
+      const sp = sidePull[i];
+      if (sp > 0) t += sp * 10 * (1 - side[pos[i]]);
+      else if (sp < 0) t += -sp * 10 * side[pos[i]];
       if (p > 0) t += p * 10 * f;
       else if (p < 0) t += -p * 10 * (1 - f);
       if (wH && hTarget[i] >= 0) t += wH * 10 * Math.abs(f - hTarget[i]);
@@ -540,6 +551,9 @@ function evaluate() {
     if (i === undefined) continue;
     const f = geo.front[i];
     if (s.pref === 'front' && f > 0.5) { items.push({ level: 'warn', text: `${name(s)} 希望坐前排，目前在後半部` }); warnSeats.add(seats[i].id); }
+    const sd = geo.side[i];
+    if (s.hpref === 'outer' && sd < 0.5) { items.push({ level: 'warn', text: `${name(s)} 希望坐外側，目前偏中間` }); warnSeats.add(seats[i].id); }
+    if (s.hpref === 'center' && sd > 0.5) { items.push({ level: 'warn', text: `${name(s)} 希望坐中間，目前偏外側` }); warnSeats.add(seats[i].id); }
     if (s.pref === 'back' && f < 0.5) { items.push({ level: 'warn', text: `${name(s)} 希望坐後排，目前在前半部` }); warnSeats.add(seats[i].id); }
     if (state.conditions.myopia.on && s.myopia && f > 0.5) { items.push({ level: 'warn', text: `${name(s)} 近視，目前坐在後半部` }); warnSeats.add(seats[i].id); }
     for (const tid of s.tags) {
@@ -633,7 +647,7 @@ function renderConditions() {
 }
 
 function ruleCount(s) {
-  return s.avoidAdj.length + s.avoidGroup.length + s.preferGroup.length + (s.pref !== 'any' ? 1 : 0) + s.tags.length;
+  return s.avoidAdj.length + s.avoidGroup.length + s.preferGroup.length + (s.pref !== 'any' ? 1 : 0) + (s.hpref && s.hpref !== 'any' ? 1 : 0) + s.tags.length;
 }
 
 function renderTable() {
@@ -681,7 +695,10 @@ function rulesHtml(s) {
     <label>不可相鄰</label>${relSelect(s, 'avoidAdj')}
     <label>不可同組</label>${relSelect(s, 'avoidGroup')}
     <label>盡量同組</label>${relSelect(s, 'preferGroup')}
-    <label>座位偏好</label><div class="seg small">${Object.entries(PREF_LABEL).map(([k, v]) => `<button data-pref="${k}" class="${s.pref === k ? 'active' : ''}">${v}</button>`).join('')}</div>
+    <label>座位偏好</label><div class="rule-line pref-line">
+      <span class="pref-k">前後</span><div class="seg small">${Object.entries(PREF_LABEL).map(([k, v]) => `<button data-pref="${k}" class="${s.pref === k ? 'active' : ''}">${v}</button>`).join('')}</div>
+      <span class="pref-k">左右</span><div class="seg small">${Object.entries(HPREF_LABEL).map(([k, v]) => `<button data-hpref="${k}" class="${(s.hpref || 'any') === k ? 'active' : ''}">${v}</button>`).join('')}</div>
+    </div>
     <label>自訂條件</label><div class="rule-line">${tags}</div>
   </div>`;
 }
@@ -789,6 +806,9 @@ function bindStudentsPanel() {
     } else if (btn.dataset.unrel) {
       setRelation(s.id, btn.dataset.other, btn.dataset.unrel, false);
       renderTable(); renderStats(); save();
+    } else if (btn.dataset.hpref) {
+      s.hpref = btn.dataset.hpref;
+      renderTable(); save();
     } else if (btn.dataset.pref) {
       s.pref = btn.dataset.pref;
       renderTable(); save();
@@ -1257,7 +1277,7 @@ function renderSelInfo() {
   box.innerHTML = `<dl>
     <dt>學生</dt><dd><strong>${esc(s.no)}. ${esc(s.name)}</strong> ${s.gender === 'M' ? '（男）' : s.gender === 'F' ? '（女）' : ''}</dd>
     <dt>近視／身高</dt><dd>${s.myopia ? '近視' : '—'}／${s.height ? esc(s.height) + ' cm' : '—'}</dd>
-    <dt>座位偏好</dt><dd>${PREF_LABEL[s.pref]}</dd>
+    <dt>座位偏好</dt><dd>前後：${PREF_LABEL[s.pref]}；左右：${HPREF_LABEL[s.hpref || 'any']}</dd>
     <dt>不可相鄰</dt><dd>${names(s.avoidAdj)}</dd>
     <dt>不可同組</dt><dd>${names(s.avoidGroup)}</dd>
     <dt>盡量同組</dt><dd>${names(s.preferGroup)}</dd>

@@ -148,6 +148,9 @@ tr.rule-row td { padding: 4px 6px 14px 40px; border-top: 0; }
 .rules { display: grid; grid-template-columns: max-content 1fr; gap: 8px 14px; align-items: center; }
 .rules > label { color: #4b5563; font-size: 13.5px; }
 .rule-line { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.pref-line { gap: 8px; }
+.pref-k { color: var(--muted); font-size: 12.5px; }
+.pref-k + .seg { margin-right: 10px; }
 .rule-line select { font-size: 13px; padding: 4px 8px; max-width: 150px; }
 .chip {
   display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 10px; border-radius: 14px;
