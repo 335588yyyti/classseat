@@ -15,7 +15,11 @@ const WEIGHT_LABEL = { 1: '低', 2: '中', 3: '高' };
 const TAG_COLORS = ['#7c3aed', '#0891b2', '#ea580c', '#16a34a', '#db2777', '#4f46e5', '#ca8a04', '#64748b'];
 const STRATEGY_LABEL = { front: '盡量前排', back: '盡量後排', spread: '彼此分散', none: '僅標示' };
 const PREF_LABEL = { any: '不限', front: '盡量前排', back: '盡量後排' };
-const LAYOUT_LABEL = { rows: '直排', groups: '分組', u: 'ㄇ字型', custom: '自訂' };
+const LAYOUT_LABEL = { rows: '直排', groups: '分組', u: 'ㄇ字型' };
+// 座位圖（type: 'map'）：自己存的桌椅位置，可以有很多張，例如「本班」「段考」
+const isTemplate = (type = state.layout.type) => type === 'map';
+const currentMap = () => (state.layout.type === 'map' ? state.maps.find((m) => m.id === state.layout.mapId) : null);
+const templateFrom = (seats) => seats.map(({ x, y, group }) => ({ x, y, group }));
 
 // 自訂版型的預設值：依班上座位圖（黑板在上方，共 27 個座位、5 組）
 const CLASS_LAYOUT = [
@@ -59,8 +63,8 @@ function defaultState() {
       height: { on: true, weight: 2 },
       gender: { on: true, weight: 1 },
     },
-    layout: { type: 'custom', cols: 6, paired: true, groups: 6 },
-    customLayout: CLASS_LAYOUT.map((p) => ({ ...p })),
+    layout: { type: 'map', mapId: 'class', cols: 6, paired: true, groups: 6 },
+    maps: [{ id: 'class', name: '本班', seats: CLASS_LAYOUT.map((p) => ({ ...p })) }],
     seats: [],
     assign: {}, // seatId -> studentId
     locked: [], // studentIds
@@ -92,8 +96,21 @@ function normalize(data) {
   s.tags = Array.isArray(data.tags) ? data.tags : d.tags;
   s.students = data.students.map((st, i) => ({ ...newStudent(i + 1), ...st }));
   s.seats = Array.isArray(data.seats) ? data.seats : [];
-  s.customLayout = Array.isArray(data.customLayout) && data.customLayout.length ? data.customLayout : d.customLayout;
+  if (Array.isArray(data.maps)) {
+    s.maps = data.maps;
+  } else {
+    // 舊版資料：「本班」「自訂」轉成座位圖
+    s.maps = [{ id: 'class', name: '本班', seats: data.customLayout?.length ? data.customLayout : d.maps[0].seats }];
+    if (data.freeLayout?.length) s.maps.push({ id: 'free', name: '自訂', seats: data.freeLayout });
+    if (s.layout.type === 'custom') s.layout = { ...s.layout, type: 'map', mapId: 'class' };
+    if (s.layout.type === 'free') s.layout = { ...s.layout, type: 'map', mapId: data.freeLayout?.length ? 'free' : 'class' };
+  }
   if (!data.layout) s.layout.type = 'rows';
+  if (s.layout.type === 'map' && !s.maps.some((m) => m.id === s.layout.mapId)) {
+    if (s.maps.length) s.layout.mapId = s.maps[0].id; else s.layout.type = 'rows';
+  }
+  delete s.customLayout;
+  delete s.freeLayout;
   s.assign = data.assign && typeof data.assign === 'object' ? data.assign : {};
   s.locked = Array.isArray(data.locked) ? data.locked : [];
   return s;
@@ -108,7 +125,7 @@ function save() {
   }, 200);
 }
 
-const ui = { expanded: new Set(), selected: null, scale: 1, history: [] };
+const ui = { expanded: new Set(), selected: null, selSeat: null, newGroup: 'auto', scale: 1, history: [] };
 
 function toast(msg) {
   const t = $('#toast');
@@ -119,7 +136,7 @@ function toast(msg) {
 }
 
 function pushHistory() {
-  ui.history.push(JSON.stringify({ seats: state.seats, assign: state.assign, locked: state.locked, layout: state.layout, custom: state.custom, customLayout: state.customLayout }));
+  ui.history.push(JSON.stringify({ seats: state.seats, assign: state.assign, locked: state.locked, layout: state.layout, custom: state.custom, maps: state.maps }));
   if (ui.history.length > 30) ui.history.shift();
 }
 
@@ -162,15 +179,17 @@ function generateSeats(n, layout) {
     for (let g = 0; g < G; g++) {
       const gx0 = (g % perRow) * (gw + 56);
       const gy0 = Math.floor(g / perRow) * (gh + 50);
-      for (let k = 0; k < size; k++) {
+      // 人數平均分配到各組（相差最多 1 人）
+      const count = Math.floor(n / G) + (g < n % G ? 1 : 0);
+      for (let k = 0; k < count; k++) {
         add(gx0 + (k % 2) * (DESK_W + 4), gy0 + Math.floor(k / 2) * (DESK_H + 4), 'G' + (g + 1));
       }
     }
-  } else if (layout.type === 'custom') {
-    const tpl = state.customLayout;
+  } else if (isTemplate(layout.type)) {
+    const tpl = state.maps.find((m) => m.id === layout.mapId)?.seats || [];
     tpl.forEach((p) => add(p.x, p.y, p.group));
-    // 學生比自訂座位多時，在最後面補一排桌子
-    const maxY = Math.max(...tpl.map((p) => p.y));
+    // 學生比座位圖的座位多時，在最後面補一排桌子
+    const maxY = tpl.length ? Math.max(...tpl.map((p) => p.y)) : -(DESK_H + 26);
     for (let i = 0; i < n - tpl.length; i++) {
       add((i % 8) * (DESK_W + 14), maxY + (DESK_H + 26) * (1 + Math.floor(i / 8)), null);
     }
@@ -297,7 +316,7 @@ function geometry(seats = state.seats) {
       }
     }
   }
-  const isGroups = state.layout.type === 'groups' || (state.layout.type === 'custom' && seats.some((s) => s.group));
+  const isGroups = state.layout.type === 'groups' || (isTemplate() && seats.some((s) => s.group));
   const groupKeys = [...new Set(seats.map((s) => s.group).filter(Boolean))];
   const groupIdx = seats.map((s) => (s.group ? groupKeys.indexOf(s.group) : -1));
   const sameGroup = (a, b) =>
@@ -862,9 +881,12 @@ function bindStudentsPanel() {
    ========================================================= */
 
 function renderSeatsPanel() {
-  $$('#layoutSeg button').forEach((b) => b.classList.toggle('active', b.dataset.layout === state.layout.type));
+  renderLayoutSeg();
   $$('#modeSeg button').forEach((b) => b.classList.toggle('active', b.dataset.mode === state.mode));
-  $('#editTools').hidden = state.mode !== 'move';
+  $('#editTools').hidden = !canEditDesks();
+  if (ui.newGroup !== 'auto' && ui.newGroup !== 'new' && ui.newGroup !== 'none' && !groupKeys().includes(ui.newGroup)) ui.newGroup = 'auto';
+  $('#newDeskGroup').innerHTML = groupOptions(ui.newGroup, true);
+  $('#btnResetDesks').hidden = isTemplate();
   $('#btnFlip').textContent = state.flipped ? '視角：講台在下（老師）' : '視角：講台在上（學生）';
   $('#btnUndo').disabled = !ui.history.length;
   $('#btnUnlockAll').disabled = !state.locked.length;
@@ -884,13 +906,76 @@ function renderLayoutOpts() {
   } else if (L.type === 'groups') {
     html = `<label>分成 <input type="number" min="3" max="10" value="${L.groups}" data-lo="groups"> 組</label>
       <span class="hint">每組 ${Math.ceil(n / L.groups)} 人以內</span>`;
-  } else if (L.type === 'custom') {
-    html = `<span class="hint">${state.customLayout.length} 個座位；切到「拖曳：移動桌椅」可調整，位置會自動記住</span>`;
+  } else if (L.type === 'map') {
+    const m = currentMap();
+    html = `<label>名稱 <input type="text" class="map-name" value="${esc(m?.name)}" data-map-name aria-label="座位圖名稱"></label>
+      <span class="hint">${m?.seats.length || 0} 個座位；可新增、刪除、拖動座位，會自動記住</span>`;
   } else {
     html = `<span class="hint">${n > 24 ? '內外雙層 ㄇ 字型' : '單層 ㄇ 字型'}，開口朝向講台</span>`;
   }
-  if (state.custom) html += '<button class="btn small" data-save-custom>把目前桌椅存成自訂版型</button>';
+  if (state.custom) html += '<button class="btn small" data-save-custom>存成新的座位圖</button>';
   $('#layoutOpts').innerHTML = html;
+}
+
+function renderLayoutSeg() {
+  const L = state.layout;
+  const builtin = Object.entries(LAYOUT_LABEL).map(([k, v]) =>
+    `<button data-layout="${k}" class="${L.type === k ? 'active' : ''}">${v}</button>`).join('');
+  const maps = state.maps.map((m) =>
+    `<button data-map="${m.id}" class="map-btn ${L.type === 'map' && L.mapId === m.id ? 'active' : ''}">${esc(m.name || '未命名')}<span class="map-del" data-del-map="${m.id}" title="刪除這張座位圖" role="button" aria-label="刪除">×</span></button>`).join('');
+  $('#layoutSeg').innerHTML = `${builtin}<span class="seg-sep"></span>${maps}<button data-new-map class="new-map">＋ 新增座位圖</button>`;
+}
+
+function openMapDialog(start = 'groups') {
+  const dlg = $('#mapDialog');
+  $('#mapName').value = `座位圖 ${state.maps.length + 1}`;
+  $('#mapGroups').value = state.layout.groups;
+  $('#mapCols').value = state.layout.cols;
+  $$('input[name="mapStart"]', dlg).forEach((r) => { r.checked = r.value === start; });
+  $('#mapCount').textContent = state.students.length;
+  dlg.showModal();
+  $('#mapName').select();
+}
+
+function createMap() {
+  const start = $('input[name="mapStart"]:checked')?.value || 'groups';
+  const n = state.students.length;
+  let seats;
+  if (start === 'copy') {
+    seats = templateFrom(state.seats);
+  } else {
+    const L = {
+      ...state.layout,
+      type: start,
+      groups: clamp(Number($('#mapGroups').value) || 6, 3, 10),
+      cols: clamp(Number($('#mapCols').value) || 6, 3, 10),
+    };
+    seats = templateFrom(generateSeats(n, L));
+  }
+  const map = { id: uid(), name: $('#mapName').value.trim() || `座位圖 ${state.maps.length + 1}`, seats };
+  pushHistory();
+  state.maps.push(map);
+  state.layout.type = 'map';
+  state.layout.mapId = map.id;
+  relayout();
+  save();
+  renderSeatsPanel();
+  toast(`已新增座位圖「${map.name}」`);
+}
+
+function deleteMap(id) {
+  const m = state.maps.find((x) => x.id === id);
+  if (!m || !confirm(`刪除座位圖「${m.name}」？`)) return;
+  pushHistory();
+  state.maps = state.maps.filter((x) => x.id !== id);
+  if (state.layout.type === 'map' && state.layout.mapId === id) {
+    if (state.maps.length) state.layout.mapId = state.maps[0].id;
+    else state.layout.type = 'groups';
+    relayout();
+  }
+  save();
+  renderSeatsPanel();
+  toast(`已刪除「${m.name}」`);
 }
 
 function renderLegend() {
@@ -921,8 +1006,13 @@ function renderRoom() {
   if (!state.seats.length) ensureSeating();
   const pad = 30;
   const b = roomBounds();
-  const W = b.maxX - b.minX + DESK_W + pad * 2;
-  const H = b.maxY - b.minY + DESK_H + pad * 2 + PODIUM_SPACE;
+  // 可編輯桌椅時，在右邊與下方多留一些空白，方便把桌子拖過去或新增
+  const edit = canEditDesks();
+  const slack = edit ? { x: DESK_W, y: DESK_H * 2 } : { x: 0, y: 0 };
+  // 可編輯時教室至少撐滿卡片寬度，多出來的都是可放桌子的空白
+  const W = Math.max(b.maxX - b.minX + DESK_W + pad * 2 + slack.x, edit ? $('#roomWrap').clientWidth : 0);
+  const H = b.maxY - b.minY + DESK_H + pad * 2 + PODIUM_SPACE + slack.y;
+  ui.view = { b, pad };
   room.style.width = W + 'px';
   room.style.height = H + 'px';
   room.classList.toggle('move-mode', state.mode === 'move');
@@ -930,6 +1020,8 @@ function renderRoom() {
   const ev = evaluate();
   const lockedSet = new Set(state.locked);
   const sel = ui.selected ? studentById(ui.selected) : null;
+  if (sel) ui.selSeat = state.seats.find((x) => state.assign[x.id] === sel.id)?.id || null;
+  if (ui.selSeat && !state.seats.some((x) => x.id === ui.selSeat)) ui.selSeat = null;
   const bad = new Set(sel ? [...sel.avoidAdj, ...sel.avoidGroup] : []);
   const good = new Set(sel ? sel.preferGroup : []);
 
@@ -937,17 +1029,21 @@ function renderRoom() {
   const podiumY = state.flipped ? H - pad - 40 : pad - 10;
   let html = `<div class="podium" style="left:${(W - pw) / 2}px;top:${podiumY}px;width:${pw}px">講 台</div>`;
 
-  if (state.layout.type === 'groups' || state.layout.type === 'custom') {
+  if (state.layout.type === 'groups' || isTemplate()) {
+    const members = {};
+    state.seats.forEach((s) => { if (groupNum(s.group)) (members[s.group] ||= []).push(toView(s.x, s.y, b, pad)); });
     const groups = {};
-    state.seats.forEach((s) => {
-      if (!s.group) return;
-      const v = toView(s.x, s.y, b, pad);
-      const g = groups[s.group] || (groups[s.group] = { x: Infinity, y: Infinity, maxY: -Infinity });
-      g.x = Math.min(g.x, v.x); g.y = Math.min(g.y, v.y); g.maxY = Math.max(g.maxY, v.y);
-    });
+    for (const [k, vs] of Object.entries(members)) {
+      // 標籤放在這組主要聚集處（離中位數最近的座位群），避免被零星座位拉走
+      const med = (arr) => arr.slice().sort((p, q) => p - q)[Math.floor(arr.length / 2)];
+      const mx = med(vs.map((v) => v.x)), my = med(vs.map((v) => v.y));
+      const core = vs.filter((v) => Math.abs(v.x - mx) <= DESK_W * 2.2 && Math.abs(v.y - my) <= DESK_H * 2.5);
+      const use = core.length ? core : vs;
+      groups[k] = { x: Math.min(...use.map((v) => v.x)), y: Math.min(...use.map((v) => v.y)), maxY: Math.max(...use.map((v) => v.y)) };
+    }
     for (const [k, g] of Object.entries(groups)) {
       const y = state.flipped ? g.maxY + DESK_H + 3 : g.y - 18;
-      html += `<div class="group-label" style="left:${g.x}px;top:${y}px">第 ${k.slice(1)} 組</div>`;
+      html += `<div class="group-label" style="left:${g.x}px;top:${y}px">第 ${groupNum(k)} 組</div>`;
     }
   }
 
@@ -955,38 +1051,132 @@ function renderRoom() {
     const v = toView(seat.x, seat.y, b, pad);
     const st = studentById(state.assign[seat.id]);
     const cls = ['desk'];
+    if (seat.id === ui.selSeat) cls.push('selected');
     if (!st) cls.push('empty');
     else {
       if (st.gender) cls.push('g-' + st.gender);
       if (lockedSet.has(st.id)) cls.push('locked');
       if (ev.errSeats.has(seat.id)) cls.push('conflict');
       else if (ev.warnSeats.has(seat.id)) cls.push('warnd');
-      if (sel && st.id === sel.id) cls.push('selected');
-      else if (bad.has(st.id)) cls.push('rel-bad');
+      if (sel && st.id === sel.id) { /* 已標示 */ } else if (bad.has(st.id)) cls.push('rel-bad');
       else if (good.has(st.id)) cls.push('rel-good');
     }
     let inner;
     if (st) {
       const tags = st.tags.map((tid) => { const t = tagById(tid); return t ? `<span class="d-tag" style="background:${tagColor(tid)}" title="${esc(t.name)}">${esc(t.name.slice(0, 1))}</span>` : ''; }).join('');
-      inner = `<div class="d-top"><span class="d-no">${esc(st.no)}</span><span class="d-name">${esc(st.name)}</span></div>
-        <div class="d-badges">${st.myopia ? '<span title="近視">👓</span>' : ''}${st.height ? `<span>${esc(st.height)}</span>` : ''}${tags}</div>
+      const badges = `${st.myopia ? '<span title="近視">👓</span>' : ''}${st.height ? `<span>${esc(st.height)}</span>` : ''}${tags}`;
+      inner = `<span class="d-no">${esc(st.no)}</span><span class="d-name">${esc(st.name)}</span>
+        ${badges ? `<div class="d-badges">${badges}</div>` : ''}
         <button class="lock" data-lock title="${lockedSet.has(st.id) ? '解除鎖定' : '鎖定此座位'}">${lockedSet.has(st.id) ? '🔒' : '🔓'}</button>`;
     } else {
-      inner = `<span>空位</span>${state.mode === 'move' ? '<button class="del" data-del-desk title="刪除這張桌子">×</button>' : ''}`;
+      inner = '<span class="d-empty">空位</span>';
+    }
+    if (canEditDesks()) {
+      inner += '<button class="del" data-del-desk title="刪除這個座位">×</button>';
+      if (groupNum(seat.group)) inner += `<span class="d-grp">${groupNum(seat.group)}組</span>`;
     }
     html += `<div class="${cls.join(' ')}" data-seat="${seat.id}" style="left:${v.x}px;top:${v.y}px">${inner}</div>`;
   }
   room.innerHTML = html;
+  fitNames();
   fitRoom();
 
   const empties = state.seats.length - Object.keys(state.assign).length;
-  $('#roomHint').textContent = (state.mode === 'swap'
-    ? '拖曳學生到另一個座位即可互換位置；點一下學生可查看條件，點 🔓 可鎖定座位。'
-    : '拖曳桌子可自由調整位置；可新增或刪除空桌。') + `　（${state.seats.length} 個座位、${empties} 個空位）`;
+  const tips = state.mode === 'swap'
+    ? ['拖到另一個座位＝互換', '拖到空白處＝移動座位', '點一下學生可查看條件，🔓 可鎖定']
+    : ['拖曳桌子可自由調整位置'];
+  if (canEditDesks()) tips.push('在空白處點兩下＝新增座位', '桌子左上角 × ＝刪除座位');
+  $('#roomHint').textContent = tips.join('；') + `。（${state.seats.length} 個座位、${empties} 個空位）`;
 
   renderChecks(ev);
   renderSelInfo();
   $('#printTitle').textContent = `${state.className || ''} 座位表`.trim();
+}
+
+/** 名字字體依桌子寬度自動放大／縮小 */
+function fitNames() {
+  const els = $$('#room .d-name');
+  const MAX = 24, MIN = 11;
+  els.forEach((el) => { el.style.fontSize = MAX + 'px'; });
+  const sizes = els.map((el) => (el.clientWidth && el.scrollWidth > el.clientWidth
+    ? Math.max(MIN, Math.floor((MAX * el.clientWidth) / el.scrollWidth))
+    : MAX));
+  els.forEach((el, i) => { el.style.fontSize = sizes[i] + 'px'; });
+}
+
+/** 畫面座標（桌子左上角）→ 資料座標 */
+function fromView(vx, vy) {
+  const { b, pad } = ui.view;
+  const p = state.flipped
+    ? { x: b.maxX + pad - vx, y: b.maxY + pad - vy }
+    : { x: vx + b.minX - pad, y: vy + b.minY - pad - PODIUM_SPACE };
+  return { x: Math.round(p.x / 8) * 8, y: Math.round(p.y / 8) * 8 };
+}
+
+function canEditDesks() {
+  return state.mode === 'move' || isTemplate();
+}
+
+/* ---------- 組別 ---------- */
+const groupNum = (g) => (/^G\d+$/.test(g || '') ? Number(g.slice(1)) : 0);
+function groupKeys() {
+  return [...new Set(state.seats.map((s) => s.group).filter(groupNum))].sort((a, b) => groupNum(a) - groupNum(b));
+}
+function nextGroupKey() {
+  return 'G' + (Math.max(0, ...state.seats.map((s) => groupNum(s.group))) + 1);
+}
+function groupOptions(current, withAuto) {
+  const opt = (v, label) => `<option value="${v}" ${current === v ? 'selected' : ''}>${label}</option>`;
+  return (withAuto ? opt('auto', '自動（最近的一組）') : '')
+    + groupKeys().map((k) => opt(k, `第 ${groupNum(k)} 組`)).join('')
+    + opt('new', '＋ 新的一組') + opt('none', '不分組');
+}
+/** 把選項（auto / new / none / G#）換成實際組別 */
+function resolveGroup(choice, x, y) {
+  if (choice === 'none') return null;
+  if (choice === 'new') return nextGroupKey();
+  if (choice !== 'auto') return choice;
+  let best = null, bestD = Infinity;
+  for (const s of state.seats) {
+    if (!groupNum(s.group)) continue;
+    const d = Math.hypot((s.x - x) / DESK_W, (s.y - y) / DESK_H);
+    if (d < bestD) { bestD = d; best = s.group; }
+  }
+  return bestD <= 2.5 ? best : null;
+}
+
+function addDeskAt(x, y) {
+  pushHistory();
+  const group = resolveGroup(ui.newGroup, x, y);
+  // 選「新的一組」後，接著新增的座位都加入同一個新組
+  if (ui.newGroup === 'new' && group) ui.newGroup = group;
+  const seat = { id: uid(), x, y, group };
+  state.seats.push(seat);
+  // 有學生還沒座位時，直接坐進新座位
+  const seated = new Set(Object.values(state.assign));
+  const waiting = sortedStudents().find((s) => !seated.has(s.id));
+  if (waiting) state.assign[seat.id] = waiting.id;
+  markDesksEdited();
+  save();
+  renderSeatsPanel();
+}
+
+function deleteDesk(seatId) {
+  const sid = state.assign[seatId];
+  if (sid) {
+    const empty = seatOrder(state.seats).find((s) => s.id !== seatId && !state.assign[s.id]);
+    if (!empty) { toast('座位不能少於學生人數；請先新增空位或減少人數'); return; }
+    pushHistory();
+    state.assign[empty.id] = sid;
+    toast(`${studentById(sid)?.name || '學生'} 已移到空位`);
+  } else {
+    pushHistory();
+  }
+  delete state.assign[seatId];
+  state.seats = state.seats.filter((s) => s.id !== seatId);
+  markDesksEdited();
+  save();
+  renderSeatsPanel();
 }
 
 function fitRoom() {
@@ -1012,7 +1202,16 @@ function renderChecks(ev) {
 function renderSelInfo() {
   const box = $('#selInfo');
   const s = ui.selected ? studentById(ui.selected) : null;
-  if (!s) { box.innerHTML = '<p class="hint">點一下座位上的學生，可查看他的條件與關係。</p>'; return; }
+  const seat = state.seats.find((x) => x.id === ui.selSeat);
+  const groupBox = seat && canEditDesks()
+    ? `<div class="seat-grp"><label>這個座位屬於 <select data-seat-group>${groupOptions(groupNum(seat.group) ? seat.group : 'none', false)}</select></label></div>`
+    : '';
+  if (!s) {
+    box.innerHTML = seat
+      ? `<p><strong>空位</strong></p>${groupBox}`
+      : `<p class="hint">點一下座位，可查看學生的條件與關係${canEditDesks() ? '，或更改座位的組別' : ''}。</p>`;
+    return;
+  }
   const names = (ids) => ids.map((id) => studentById(id)?.name).filter(Boolean).map(esc).join('、') || '—';
   const tags = s.tags.map((t) => tagById(t)?.name).filter(Boolean).map(esc).join('、') || '—';
   box.innerHTML = `<dl>
@@ -1024,7 +1223,7 @@ function renderSelInfo() {
     <dt>盡量同組</dt><dd>${names(s.preferGroup)}</dd>
     <dt>自訂條件</dt><dd>${tags}</dd>
     ${s.note ? `<dt>備註</dt><dd>${esc(s.note)}</dd>` : ''}
-  </dl><p class="hint">橘框：不可相鄰／同組的對象；綠框：盡量同組的對象。</p>`;
+  </dl>${groupBox}<p class="hint">橘框：不可相鄰／同組的對象；綠框：盡量同組的對象。</p>`;
 }
 
 function swapSeats(a, b) {
@@ -1038,8 +1237,9 @@ function swapSeats(a, b) {
 }
 
 function markDesksEdited() {
-  if (state.layout.type === 'custom') {
-    state.customLayout = state.seats.map(({ x, y, group }) => ({ x, y, group }));
+  const m = currentMap();
+  if (m) {
+    m.seats = templateFrom(state.seats);
   } else {
     state.custom = true;
   }
@@ -1056,21 +1256,33 @@ function changeLayout(mutator) {
 
 function bindSeatsPanel() {
   $('#layoutSeg').addEventListener('click', (e) => {
+    const del = e.target.closest('[data-del-map]');
+    if (del) { e.stopPropagation(); deleteMap(del.dataset.delMap); return; }
+    if (e.target.closest('[data-new-map]')) { openMapDialog(state.custom ? 'copy' : 'groups'); return; }
+    const mapId = e.target.closest('[data-map]')?.dataset.map;
+    if (mapId) {
+      if (state.layout.type === 'map' && state.layout.mapId === mapId && !state.custom) return;
+      changeLayout((L) => { L.type = 'map'; L.mapId = mapId; });
+      toast(`已切換到「${currentMap()?.name}」，可按「依條件自動排座」重新安排`);
+      return;
+    }
     const t = e.target.closest('[data-layout]')?.dataset.layout;
     if (!t || (t === state.layout.type && !state.custom)) return;
     changeLayout((L) => { L.type = t; });
     toast(`已切換為${LAYOUT_LABEL[t]}，可按「依條件自動排座」重新安排`);
   });
+  $('#mapDialog').addEventListener('close', () => { if ($('#mapDialog').returnValue === 'ok') createMap(); });
   $('#layoutOpts').addEventListener('click', (e) => {
-    if (!e.target.closest('[data-save-custom]')) return;
-    if (!confirm('用目前的桌椅位置取代「自訂」版型？')) return;
-    pushHistory();
-    state.layout.type = 'custom';
-    state.custom = false;
-    markDesksEdited();
+    if (e.target.closest('[data-save-custom]')) openMapDialog('copy');
+  });
+  $('#layoutOpts').addEventListener('input', (e) => {
+    if (!('mapName' in e.target.dataset)) return;
+    const m = currentMap();
+    if (!m) return;
+    m.name = e.target.value;
+    const btn = $(`#layoutSeg [data-map="${m.id}"]`);
+    if (btn) btn.firstChild.textContent = m.name || '未命名';
     save();
-    renderSeatsPanel();
-    toast('已存成自訂版型');
   });
   $('#layoutOpts').addEventListener('change', (e) => {
     const k = e.target.dataset.lo;
@@ -1118,13 +1330,23 @@ function bindSeatsPanel() {
     pushHistory(); relayout(); save(); renderSeatsPanel();
   });
   $('#btnAddDesk').addEventListener('click', () => {
-    pushHistory();
     const b = roomBounds();
     const last = state.seats.filter((s) => s.y === b.maxY);
     const x = last.length ? Math.max(...last.map((s) => s.x)) + DESK_W + 14 : b.minX;
-    state.seats.push({ id: uid(), x, y: b.maxY, group: null });
+    addDeskAt(x, b.maxY);
+  });
+
+  $('#newDeskGroup').addEventListener('change', (e) => { ui.newGroup = e.target.value; });
+  $('#selInfo').addEventListener('change', (e) => {
+    if (!('seatGroup' in e.target.dataset)) return;
+    const seat = state.seats.find((x) => x.id === ui.selSeat);
+    if (!seat) return;
+    pushHistory();
+    seat.group = resolveGroup(e.target.value, seat.x, seat.y);
     markDesksEdited();
-    save(); renderSeatsPanel();
+    save();
+    renderSeatsPanel();
+    toast(seat.group ? `已改到第 ${groupNum(seat.group)} 組` : '已設為不分組');
   });
 
   const room = $('#room');
@@ -1136,12 +1358,16 @@ function bindSeatsPanel() {
       state.locked = state.locked.includes(sid) ? state.locked.filter((x) => x !== sid) : [...state.locked, sid];
       save(); renderSeatsPanel();
     } else if (e.target.closest('[data-del-desk]')) {
-      if (state.assign[desk.dataset.seat]) return;
-      pushHistory();
-      state.seats = state.seats.filter((s) => s.id !== desk.dataset.seat);
-      markDesksEdited();
-      save(); renderSeatsPanel();
+      deleteDesk(desk.dataset.seat);
     }
+  });
+  room.addEventListener('dblclick', (e) => {
+    if (!canEditDesks() || e.target.closest('.desk')) return;
+    const r = room.getBoundingClientRect();
+    const vx = (e.clientX - r.left) / ui.scale - DESK_W / 2;
+    const vy = (e.clientY - r.top) / ui.scale - DESK_H / 2;
+    const p = fromView(vx, vy);
+    addDeskAt(p.x, p.y);
   });
 
   let drag = null;
@@ -1149,7 +1375,6 @@ function bindSeatsPanel() {
     const desk = e.target.closest('.desk');
     if (!desk || e.button > 0 || e.target.closest('button')) return;
     const seatId = desk.dataset.seat;
-    if (state.mode === 'swap' && !state.assign[seatId]) return;
     const rect = desk.getBoundingClientRect();
     drag = {
       seatId, desk, moved: false,
@@ -1192,15 +1417,32 @@ function bindSeatsPanel() {
     drag = null;
     if (!d.moved) {
       const sid = state.assign[d.seatId];
-      if (sid && e.type === 'pointerup') { ui.selected = ui.selected === sid ? null : sid; renderRoom(); }
+      if (e.type === 'pointerup') {
+        if (ui.selSeat === d.seatId) { ui.selSeat = null; ui.selected = null; } else { ui.selSeat = d.seatId; ui.selected = sid || null; }
+        renderRoom();
+      }
       return;
     }
     if (state.mode === 'swap') {
       d.ghost.remove();
       d.desk.classList.remove('dragging');
-      const target = e.type === 'pointerup' ? document.elementFromPoint(e.clientX, e.clientY)?.closest('#room .desk') : null;
+      const hit = e.type === 'pointerup' ? document.elementFromPoint(e.clientX, e.clientY) : null;
+      const target = hit?.closest('#room .desk');
       $$('#room .drop-target').forEach((x) => x.classList.remove('drop-target'));
-      if (target && target !== d.desk) swapSeats(d.seatId, target.dataset.seat);
+      if (target && target !== d.desk) {
+        swapSeats(d.seatId, target.dataset.seat);
+      } else if (!target && hit?.closest('#room')) {
+        // 拖到空白處：整個座位（連同學生）移過去
+        const r = room.getBoundingClientRect();
+        const p = fromView((e.clientX - d.ox - r.left) / ui.scale, (e.clientY - d.oy - r.top) / ui.scale);
+        const seat = state.seats.find((s) => s.id === d.seatId);
+        pushHistory();
+        seat.x = p.x;
+        seat.y = p.y;
+        markDesksEdited();
+        save();
+        renderSeatsPanel();
+      }
     } else {
       let dx = (e.clientX - d.sx) / ui.scale, dy = (e.clientY - d.sy) / ui.scale;
       if (state.flipped) { dx = -dx; dy = -dy; }
@@ -1254,7 +1496,7 @@ function bindGlobal() {
       if (!data) throw new Error('bad');
       if (data.students.length < MIN_N || data.students.length > MAX_N) throw new Error('count');
       state = data;
-      ui.history = []; ui.selected = null; ui.expanded.clear();
+      ui.history = []; ui.selected = null; ui.selSeat = null; ui.expanded.clear();
       cn.value = state.className || '';
       ensureSeating();
       showTab(state.tab);
@@ -1266,7 +1508,7 @@ function bindGlobal() {
   $('#btnReset').addEventListener('click', () => {
     if (!confirm('確定清除所有學生、條件與座位資料，回到預設狀態？')) return;
     state = defaultState();
-    ui.history = []; ui.selected = null; ui.expanded.clear();
+    ui.history = []; ui.selected = null; ui.selSeat = null; ui.expanded.clear();
     cn.value = '';
     ensureSeating();
     showTab('students');
