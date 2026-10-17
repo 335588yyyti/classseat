@@ -15,6 +15,7 @@ const WEIGHT_LABEL = { 1: '低', 2: '中', 3: '高' };
 const TAG_COLORS = ['#7c3aed', '#0891b2', '#ea580c', '#16a34a', '#db2777', '#4f46e5', '#ca8a04', '#64748b'];
 const STRATEGY_LABEL = { front: '盡量前排', back: '盡量後排', spread: '彼此分散', none: '僅標示' };
 const PREF_LABEL = { any: '不限', front: '盡量前排', back: '盡量後排' };
+const HPREF_LABEL = { any: '不限', outer: '盡量外側', center: '盡量中間' };
 const LAYOUT_LABEL = { rows: '直排', groups: '分組', u: 'ㄇ字型' };
 // 座位圖（type: 'map'）：自己存的桌椅位置，可以有很多張，例如「本班」「段考」
 const isTemplate = (type = state.layout.type) => type === 'map';
@@ -46,7 +47,7 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 function newStudent(no) {
   return {
     id: uid(), no, name: '學生' + no, gender: '', myopia: false, height: '', note: '',
-    tags: [], avoidAdj: [], avoidGroup: [], preferGroup: [], pref: 'any',
+    tags: [], avoidAdj: [], avoidGroup: [], preferGroup: [], pref: 'any', hpref: 'any',
   };
 }
 
@@ -125,7 +126,7 @@ function save() {
   }, 200);
 }
 
-const ui = { expanded: new Set(), selected: null, selSeat: null, newGroup: 'auto', scale: 1, history: [] };
+const ui = { selected: null, selSeat: null, newGroup: 'auto', scale: 1, history: [] };
 
 function toast(msg) {
   const t = $('#toast');
@@ -302,6 +303,11 @@ function geometry(seats = state.seats) {
   const ys = seats.map((s) => s.y);
   const minY = Math.min(...ys), maxY = Math.max(...ys);
   const front = seats.map((s) => (maxY === minY ? 0 : (s.y - minY) / (maxY - minY)));
+  // 左右：0＝最中間，1＝最外側（左右兩邊）
+  const xs = seats.map((s) => s.x);
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+  const half = (Math.max(...xs) - Math.min(...xs)) / 2;
+  const side = seats.map((s) => (half ? Math.abs(s.x - cx) / half : 0));
   const adj = new Uint8Array(N * N);
   const adjPairs = [];
   const rowPairs = [];
@@ -321,7 +327,7 @@ function geometry(seats = state.seats) {
   const groupIdx = seats.map((s) => (s.group ? groupKeys.indexOf(s.group) : -1));
   const sameGroup = (a, b) =>
     (groupIdx[a] >= 0 && groupIdx[a] === groupIdx[b]) || (!isGroups && adj[a * N + b] === 1);
-  return { N, front, adj, adjPairs, rowPairs, isGroups, groupIdx, groupCount: groupKeys.length, sameGroup };
+  return { N, front, side, adj, adjPairs, rowPairs, isGroups, groupIdx, groupCount: groupKeys.length, sameGroup };
 }
 
 /* =========================================================
@@ -368,6 +374,7 @@ function buildModel() {
       if (members.length > 1) spreadTags.push({ w, set: new Set(members) });
     }
   });
+  const sidePull = new Float64Array(studs.length);
   studs.forEach((s, i) => {
     let p = 0;
     if (s.pref === 'front') p += 5;
@@ -381,15 +388,19 @@ function buildModel() {
       if (t.strategy === 'back') p -= w;
     }
     frontPull[i] = p;
+    sidePull[i] = s.hpref === 'outer' ? 5 : s.hpref === 'center' ? -5 : 0;
   });
   const gender = studs.map((s) => s.gender || '');
 
   function cost(occ, pos) {
     let t = 0;
-    const { front, adj, N, sameGroup, adjPairs, rowPairs, isGroups, groupIdx, groupCount } = geo;
+    const { front, side, adj, N, sameGroup, adjPairs, rowPairs, isGroups, groupIdx, groupCount } = geo;
     for (let i = 0; i < studs.length; i++) {
       const f = front[pos[i]];
       const p = frontPull[i];
+      const sp = sidePull[i];
+      if (sp > 0) t += sp * 10 * (1 - side[pos[i]]);
+      else if (sp < 0) t += -sp * 10 * side[pos[i]];
       if (p > 0) t += p * 10 * f;
       else if (p < 0) t += -p * 10 * (1 - f);
       if (wH && hTarget[i] >= 0) t += wH * 10 * Math.abs(f - hTarget[i]);
@@ -540,6 +551,9 @@ function evaluate() {
     if (i === undefined) continue;
     const f = geo.front[i];
     if (s.pref === 'front' && f > 0.5) { items.push({ level: 'warn', text: `${name(s)} 希望坐前排，目前在後半部` }); warnSeats.add(seats[i].id); }
+    const sd = geo.side[i];
+    if (s.hpref === 'outer' && sd < 0.5) { items.push({ level: 'warn', text: `${name(s)} 希望坐外側，目前偏中間` }); warnSeats.add(seats[i].id); }
+    if (s.hpref === 'center' && sd > 0.5) { items.push({ level: 'warn', text: `${name(s)} 希望坐中間，目前偏外側` }); warnSeats.add(seats[i].id); }
     if (s.pref === 'back' && f < 0.5) { items.push({ level: 'warn', text: `${name(s)} 希望坐後排，目前在前半部` }); warnSeats.add(seats[i].id); }
     if (state.conditions.myopia.on && s.myopia && f > 0.5) { items.push({ level: 'warn', text: `${name(s)} 近視，目前坐在後半部` }); warnSeats.add(seats[i].id); }
     for (const tid of s.tags) {
@@ -573,6 +587,8 @@ function evaluate() {
 
 function renderStudentsPanel() {
   $('#countInput').value = state.students.length;
+  if (!$('#gbFrom').value) $('#gbFrom').value = 1;
+  if (!$('#gbTo').value) $('#gbTo').value = Math.floor(state.students.length / 2);
   renderStats();
   renderConditions();
   renderTable();
@@ -631,57 +647,106 @@ function renderConditions() {
 }
 
 function ruleCount(s) {
-  return s.avoidAdj.length + s.avoidGroup.length + s.preferGroup.length + (s.pref !== 'any' ? 1 : 0) + s.tags.length;
+  return s.avoidAdj.length + s.avoidGroup.length + s.preferGroup.length + (s.pref !== 'any' ? 1 : 0) + (s.hpref && s.hpref !== 'any' ? 1 : 0) + s.tags.length;
+}
+
+const REL_TYPES = [
+  { key: 'avoidAdj', icon: '🚫', label: '不可相鄰', short: '不相鄰' },
+  { key: 'avoidGroup', icon: '⛔', label: '不可同組', short: '不同組' },
+  { key: 'preferGroup', icon: '🤝', label: '盡量同組', short: '要同組' },
+];
+const POS_FRONT = [['any', '不限'], ['front', '⬆ 靠前'], ['back', '⬇ 靠後']];
+const POS_SIDE = [['any', '不限'], ['outer', '↔ 靠外側'], ['center', '◎ 靠中間']];
+
+/** 卡片下方的條件摘要 */
+function summaryHtml(s) {
+  const bits = [];
+  for (const r of REL_TYPES) if (s[r.key].length) bits.push(`<span class="sum-chip rel-${r.key}">${r.icon} ${r.short} ${s[r.key].length}</span>`);
+  if (s.pref !== 'any') bits.push(`<span class="sum-chip">${s.pref === 'front' ? '⬆ 靠前' : '⬇ 靠後'}</span>`);
+  if (s.hpref && s.hpref !== 'any') bits.push(`<span class="sum-chip">${s.hpref === 'outer' ? '↔ 靠外側' : '◎ 靠中間'}</span>`);
+  for (const tid of s.tags) {
+    const t = tagById(tid);
+    if (t) bits.push(`<span class="sum-chip tag" style="--c:${tagColor(tid)}">${esc(t.name)}</span>`);
+  }
+  return bits.length ? bits.join('') : '<span class="sum-none">尚未設定條件</span>';
 }
 
 function renderTable() {
-  const rows = state.students.map((s) => {
-    const open = ui.expanded.has(s.id);
-    const n = ruleCount(s);
-    return `
-    <tr class="main-row" data-sid="${s.id}">
-      <td class="c-no"><input type="number" min="1" value="${esc(s.no)}" data-f="no" aria-label="座號"></td>
-      <td class="c-name"><input type="text" value="${esc(s.name)}" data-f="name" aria-label="姓名"></td>
-      <td class="c-gender"><span class="gender">
-        <button data-gender="M" class="${s.gender === 'M' ? 'on-M' : ''}">男</button>
-        <button data-gender="F" class="${s.gender === 'F' ? 'on-F' : ''}">女</button></span></td>
-      <td class="c-myo"><input type="checkbox" class="check" data-f="myopia" ${s.myopia ? 'checked' : ''} aria-label="近視"></td>
-      <td class="c-h"><input type="number" min="80" max="220" placeholder="—" value="${esc(s.height)}" data-f="height" aria-label="身高"><span class="unit">cm</span></td>
-      <td class="note"><input type="text" value="${esc(s.note)}" placeholder="備註" data-f="note" aria-label="備註"></td>
-      <td><button class="btn small rule-btn ${open ? 'open' : ''}" data-toggle-rules>規則${n ? ` <span class="count">${n}</span>` : ''}</button></td>
-      <td><button class="link-btn" data-remove ${state.students.length <= MIN_N ? 'disabled title="至少需要 26 人"' : ''}>移除</button></td>
-    </tr>
-    ${open ? `<tr class="rule-row" data-sid="${s.id}"><td colspan="8">${rulesHtml(s)}</td></tr>` : ''}`;
-  });
-  $('#stuBody').innerHTML = rows.join('');
+  const minReached = state.students.length <= MIN_N;
+  $('#stuGrid').innerHTML = state.students.map((s) => `
+    <article class="stu-card ${s.gender ? 'g-' + s.gender : ''}" data-sid="${s.id}">
+      <div class="sc-top">
+        <label class="sc-no" title="座號"><span>No.</span><input type="number" min="1" value="${esc(s.no)}" data-f="no" aria-label="座號"></label>
+        <input class="sc-name" type="text" value="${esc(s.name)}" data-f="name" placeholder="姓名" aria-label="姓名">
+        <button class="sc-del" data-remove ${minReached ? 'disabled title="至少需要 26 人"' : 'title="移除這位學生"'} aria-label="移除">✕</button>
+      </div>
+      <div class="sc-attrs">
+        <span class="sc-gender" role="group" aria-label="性別">
+          <button data-gender="M" class="${s.gender === 'M' ? 'on' : ''}">男</button><button data-gender="F" class="${s.gender === 'F' ? 'on' : ''}">女</button>
+        </span>
+        <label class="sc-pill ${s.myopia ? 'on' : ''}"><input type="checkbox" data-f="myopia" ${s.myopia ? 'checked' : ''}>👓 近視</label>
+        <label class="sc-height"><input type="number" min="80" max="220" placeholder="身高" value="${esc(s.height)}" data-f="height" aria-label="身高">cm</label>
+      </div>
+      <input class="sc-note" type="text" value="${esc(s.note)}" placeholder="備註…" data-f="note" aria-label="備註">
+      <div class="sc-foot">
+        <div class="sc-sum">${summaryHtml(s)}</div>
+        <button class="sc-edit" data-open-rules>條件設定 ›</button>
+      </div>
+    </article>`).join('');
 }
 
-function relSelect(s, key) {
-  const chosen = new Set(s[key]);
-  const opts = sortedStudents().filter((o) => o.id !== s.id && !chosen.has(o.id))
-    .map((o) => `<option value="${o.id}">${esc(o.no)}. ${esc(o.name)}</option>`).join('');
-  const color = key === 'preferGroup' ? 'green' : 'red';
-  const chips = s[key].map((id) => {
-    const o = studentById(id);
-    return o ? `<span class="chip ${color}">${esc(o.no)}. ${esc(o.name)}<button data-unrel="${key}" data-other="${id}" aria-label="移除">×</button></span>` : '';
+/** 條件設定視窗內容 */
+function ruleDialogHtml(s) {
+  const brush = ui.relBrush || 'avoidAdj';
+  const relOf = (oid) => REL_TYPES.find((r) => s[r.key].includes(oid))?.key || '';
+  const pals = sortedStudents().filter((o) => o.id !== s.id).map((o) => {
+    const r = relOf(o.id);
+    const t = REL_TYPES.find((x) => x.key === r);
+    return `<button class="pal ${r ? 'rel-' + r : ''}" data-other="${o.id}" title="${t ? t.label : '無'}"><span class="pal-no">${esc(o.no)}</span>${esc(o.name)}${t ? `<span class="pal-ic">${t.icon}</span>` : ''}</button>`;
   }).join('');
-  return `<div class="rule-line"><select data-rel="${key}"><option value="">選擇同學…</option>${opts}</select>${chips}</div>`;
-}
-
-function rulesHtml(s) {
+  const posRow = (key, opts, cur) => opts.map(([v, label]) =>
+    `<button class="pos-opt ${cur === v ? 'on' : ''}" data-${key}="${v}">${label}</button>`).join('');
   const tags = state.tags.length
     ? state.tags.map((t) => {
       const on = s.tags.includes(t.id);
-      return `<button class="tag-toggle ${on ? 'on' : ''}" data-tag-toggle="${t.id}" style="${on ? `background:${tagColor(t.id)}` : ''}">${on ? '✓ ' : ''}${esc(t.name)}</button>`;
+      return `<button class="tag-check ${on ? 'on' : ''}" data-tag-toggle="${t.id}" style="--c:${tagColor(t.id)}"><span class="box">${on ? '✓' : ''}</span>${esc(t.name)}<small>${STRATEGY_LABEL[t.strategy]}</small></button>`;
     }).join('')
-    : '<span class="hint">尚未新增自訂條件（可在上方「排座條件」新增）</span>';
-  return `<div class="rules">
-    <label>不可相鄰</label>${relSelect(s, 'avoidAdj')}
-    <label>不可同組</label>${relSelect(s, 'avoidGroup')}
-    <label>盡量同組</label>${relSelect(s, 'preferGroup')}
-    <label>座位偏好</label><div class="seg small">${Object.entries(PREF_LABEL).map(([k, v]) => `<button data-pref="${k}" class="${s.pref === k ? 'active' : ''}">${v}</button>`).join('')}</div>
-    <label>自訂條件</label><div class="rule-line">${tags}</div>
-  </div>`;
+    : '<span class="hint">尚未新增自訂條件，可在上方「排座條件」新增。</span>';
+  return `
+    <section class="rd-sec">
+      <h3>與同學的關係</h3>
+      <p class="hint">先選關係，再點同學的名字；再點一次可以取消。關係會同時套用到雙方。</p>
+      <div class="brush" role="radiogroup">${REL_TYPES.map((r) =>
+        `<button class="brush-btn rel-${r.key} ${brush === r.key ? 'on' : ''}" data-brush="${r.key}">${r.icon} ${r.label}<span class="cnt">${s[r.key].length}</span></button>`).join('')}</div>
+      <div class="pals">${pals}</div>
+    </section>
+    <section class="rd-sec">
+      <h3>座位位置</h3>
+      <div class="pos-grid">
+        <span class="pos-k">前後</span><div class="pos-row">${posRow('pref', POS_FRONT, s.pref)}</div>
+        <span class="pos-k">左右</span><div class="pos-row">${posRow('hpref', POS_SIDE, s.hpref || 'any')}</div>
+      </div>
+    </section>
+    <section class="rd-sec">
+      <h3>自訂條件</h3>
+      <div class="tag-checks">${tags}</div>
+    </section>`;
+}
+
+function openRuleDialog(id) {
+  ui.ruleFor = id;
+  renderRuleDialog();
+  $('#ruleDialog').showModal();
+}
+
+function renderRuleDialog() {
+  const s = studentById(ui.ruleFor);
+  if (!s) return;
+  $('#rdTitle').textContent = `${s.no}. ${s.name} 的條件`;
+  const body = $('#rdBody');
+  const top = body.scrollTop;
+  body.innerHTML = ruleDialogHtml(s);
+  body.scrollTop = top;
 }
 
 function setStudentCount(n) {
@@ -714,7 +779,6 @@ function removeStudent(id, silent) {
   for (const s of state.students) {
     for (const k of ['avoidAdj', 'avoidGroup', 'preferGroup']) s[k] = s[k].filter((x) => x !== id);
   }
-  ui.expanded.delete(id);
   if (ui.selected === id) ui.selected = null;
   if (!silent) afterStudentsChanged();
 }
@@ -743,58 +807,68 @@ function setRelation(aId, bId, key, on) {
 }
 
 function bindStudentsPanel() {
-  const body = $('#stuBody');
+  const grid = $('#stuGrid');
+  const cardOf = (el) => el.closest('.stu-card[data-sid]');
 
-  body.addEventListener('input', (e) => {
-    const tr = e.target.closest('tr[data-sid]');
+  grid.addEventListener('input', (e) => {
+    const card = cardOf(e.target);
     const f = e.target.dataset.f;
-    if (!tr || !f || f === 'myopia') return;
-    const s = studentById(tr.dataset.sid);
+    if (!card || !f || f === 'myopia') return;
+    const s = studentById(card.dataset.sid);
     s[f] = f === 'no' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value;
     save();
   });
-  body.addEventListener('change', (e) => {
-    const tr = e.target.closest('tr[data-sid]');
-    if (!tr) return;
-    const s = studentById(tr.dataset.sid);
-    if (e.target.dataset.f === 'myopia') { s.myopia = e.target.checked; renderStats(); save(); return; }
-    if (e.target.dataset.f === 'name' || e.target.dataset.f === 'no') {
-      // 名字／座號改了，刷新其他人規則列中的名字
-      $$('tr.rule-row', body).forEach((r) => { r.firstElementChild.innerHTML = rulesHtml(studentById(r.dataset.sid)); });
-      return;
-    }
-    const rel = e.target.dataset.rel;
-    if (rel && e.target.value) {
-      setRelation(s.id, e.target.value, rel, true);
-      renderTable(); renderStats(); save();
-    }
+  grid.addEventListener('change', (e) => {
+    const card = cardOf(e.target);
+    if (!card || e.target.dataset.f !== 'myopia') return;
+    studentById(card.dataset.sid).myopia = e.target.checked;
+    e.target.closest('.sc-pill').classList.toggle('on', e.target.checked);
+    renderStats(); save();
   });
-  body.addEventListener('click', (e) => {
-    const tr = e.target.closest('tr[data-sid]');
-    if (!tr) return;
-    const s = studentById(tr.dataset.sid);
+  grid.addEventListener('click', (e) => {
+    const card = cardOf(e.target);
     const btn = e.target.closest('button');
-    if (!btn) return;
+    if (!card || !btn) return;
+    const s = studentById(card.dataset.sid);
     if (btn.dataset.gender) {
       s.gender = s.gender === btn.dataset.gender ? '' : btn.dataset.gender;
-      $$('[data-gender]', tr).forEach((b) => { b.className = s.gender === b.dataset.gender ? 'on-' + s.gender : ''; });
+      card.classList.remove('g-M', 'g-F');
+      if (s.gender) card.classList.add('g-' + s.gender);
+      $$('[data-gender]', card).forEach((b) => b.classList.toggle('on', s.gender === b.dataset.gender));
       renderStats(); save();
-    } else if ('toggleRules' in btn.dataset) {
-      ui.expanded.has(s.id) ? ui.expanded.delete(s.id) : ui.expanded.add(s.id);
-      renderTable();
+    } else if ('openRules' in btn.dataset) {
+      openRuleDialog(s.id);
     } else if ('remove' in btn.dataset) {
       if (confirm(`確定移除「${s.name}」？`)) removeStudent(s.id);
-    } else if (btn.dataset.unrel) {
-      setRelation(s.id, btn.dataset.other, btn.dataset.unrel, false);
-      renderTable(); renderStats(); save();
+    }
+  });
+
+  // 條件設定視窗
+  $('#rdClose').addEventListener('click', () => $('#ruleDialog').close());
+  $('#ruleDialog').addEventListener('close', () => { renderTable(); renderStats(); renderConditions(); });
+  $('#rdBody').addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    const s = studentById(ui.ruleFor);
+    if (!btn || !s) return;
+    if (btn.dataset.brush) {
+      ui.relBrush = btn.dataset.brush;
+    } else if (btn.dataset.other) {
+      const brush = ui.relBrush || 'avoidAdj';
+      const had = s[brush].includes(btn.dataset.other);
+      for (const r of REL_TYPES) setRelation(s.id, btn.dataset.other, r.key, false);
+      if (!had) setRelation(s.id, btn.dataset.other, brush, true);
     } else if (btn.dataset.pref) {
       s.pref = btn.dataset.pref;
-      renderTable(); save();
+    } else if (btn.dataset.hpref) {
+      s.hpref = btn.dataset.hpref;
     } else if (btn.dataset.tagToggle) {
       const t = btn.dataset.tagToggle;
       s.tags = s.tags.includes(t) ? s.tags.filter((x) => x !== t) : [...s.tags, t];
-      renderTable(); renderConditions(); save();
+    } else {
+      return;
     }
+    renderRuleDialog();
+    save();
   });
 
   $('#builtinConds').addEventListener('change', (e) => {
@@ -845,6 +919,44 @@ function bindStudentsPanel() {
   $('#btnAddStudent').addEventListener('click', () => addStudent());
   $('#btnSortNo').addEventListener('click', () => { state.students = sortedStudents(); renderTable(); save(); });
 
+  // 批次設定性別：座號範圍，或依單雙號一鍵設定
+  const applyGender = (pick, msg) => {
+    let n = 0;
+    for (const st of state.students) {
+      const g = pick(Number(st.no));
+      if (g === undefined) continue;
+      st.gender = g;
+      n++;
+    }
+    renderTable(); renderStats(); save();
+    toast(msg(n));
+  };
+  $('.gender-batch').addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    if (btn.dataset.gbQuick) {
+      const q = btn.dataset.gbQuick;
+      if (q === 'clear') {
+        if (!confirm('清除所有學生的性別？')) return;
+        applyGender(() => '', () => '已清除全部性別');
+      } else {
+        const odd = q === 'oddM' ? 'M' : 'F', even = odd === 'M' ? 'F' : 'M';
+        applyGender((no) => (no > 0 ? (no % 2 ? odd : even) : undefined), (n) => `已設定 ${n} 人：單號${odd === 'M' ? '男' : '女'}、雙號${even === 'M' ? '男' : '女'}`);
+      }
+      return;
+    }
+    if (!('gb' in btn.dataset)) return;
+    const from = Number($('#gbFrom').value), to = Number($('#gbTo').value);
+    if (!from || !to) { toast('請填寫座號範圍'); return; }
+    const lo = Math.min(from, to), hi = Math.max(from, to);
+    const g = btn.dataset.gb;
+    applyGender((no) => (no >= lo && no <= hi ? g : undefined),
+      (n) => `${lo}～${hi} 號共 ${n} 人${g ? `設為${g === 'M' ? '男' : '女'}` : '已清除性別'}`);
+    // 方便接著設定下一段：起始座號跳到下一號
+    const maxNo = Math.max(0, ...state.students.map((st) => Number(st.no) || 0));
+    if (hi < maxNo) { $('#gbFrom').value = hi + 1; $('#gbTo').value = maxNo; }
+  });
+
   $('#btnBatch').addEventListener('click', () => { $('#batchText').value = ''; $('#batchDialog').showModal(); });
   $('#batchDialog').addEventListener('close', () => {
     if ($('#batchDialog').returnValue !== 'ok') return;
@@ -868,7 +980,6 @@ function bindStudentsPanel() {
     state.students = list;
     state.assign = {};
     state.locked = [];
-    ui.expanded.clear();
     ui.selected = null;
     relayout();
     afterStudentsChanged();
@@ -1217,7 +1328,7 @@ function renderSelInfo() {
   box.innerHTML = `<dl>
     <dt>學生</dt><dd><strong>${esc(s.no)}. ${esc(s.name)}</strong> ${s.gender === 'M' ? '（男）' : s.gender === 'F' ? '（女）' : ''}</dd>
     <dt>近視／身高</dt><dd>${s.myopia ? '近視' : '—'}／${s.height ? esc(s.height) + ' cm' : '—'}</dd>
-    <dt>座位偏好</dt><dd>${PREF_LABEL[s.pref]}</dd>
+    <dt>座位偏好</dt><dd>前後：${PREF_LABEL[s.pref]}；左右：${HPREF_LABEL[s.hpref || 'any']}</dd>
     <dt>不可相鄰</dt><dd>${names(s.avoidAdj)}</dd>
     <dt>不可同組</dt><dd>${names(s.avoidGroup)}</dd>
     <dt>盡量同組</dt><dd>${names(s.preferGroup)}</dd>
@@ -1496,7 +1607,7 @@ function bindGlobal() {
       if (!data) throw new Error('bad');
       if (data.students.length < MIN_N || data.students.length > MAX_N) throw new Error('count');
       state = data;
-      ui.history = []; ui.selected = null; ui.selSeat = null; ui.expanded.clear();
+      ui.history = []; ui.selected = null; ui.selSeat = null;
       cn.value = state.className || '';
       ensureSeating();
       showTab(state.tab);
@@ -1508,7 +1619,7 @@ function bindGlobal() {
   $('#btnReset').addEventListener('click', () => {
     if (!confirm('確定清除所有學生、條件與座位資料，回到預設狀態？')) return;
     state = defaultState();
-    ui.history = []; ui.selected = null; ui.selSeat = null; ui.expanded.clear();
+    ui.history = []; ui.selected = null; ui.selSeat = null;
     cn.value = '';
     ensureSeating();
     showTab('students');
