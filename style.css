@@ -151,6 +151,12 @@ select.w-sel { padding: 2px 6px; font-size: 13px; }
 .sc-pill { display: inline-flex; align-items: center; gap: 4px; padding: 5px 10px; border-radius: 16px; border: 1.5px solid var(--line); background: var(--card); font-size: 13px; cursor: pointer; user-select: none; }
 .sc-pill input { position: absolute; opacity: 0; pointer-events: none; }
 .sc-pill.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.sc-hrow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.sc-hk, .sc-or { font-size: 12.5px; color: var(--muted); }
+.sc-hseg { display: inline-flex; border: 1.5px solid var(--line); border-radius: 16px; overflow: hidden; background: var(--card); }
+.sc-hseg button { border: 0; background: none; padding: 4px 11px; font-size: 13px; cursor: pointer; color: #4b5563; }
+.sc-hseg button + button { border-left: 1px solid var(--line); }
+.sc-hseg button.on { background: var(--accent); color: #fff; font-weight: 600; }
 .sc-height { display: inline-flex; align-items: center; gap: 3px; font-size: 12.5px; color: var(--muted); }
 .sc-height input { width: 62px; padding: 5px 8px; border-radius: 16px; }
 .sc-note { font-size: 13px; padding: 5px 10px; border-radius: 8px; border: 1px solid transparent; background: var(--field); }

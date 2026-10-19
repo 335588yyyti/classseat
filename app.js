@@ -15,6 +15,10 @@ const WEIGHT_LABEL = { 1: '低', 2: '中', 3: '高' };
 const TAG_COLORS = ['#7c3aed', '#0891b2', '#ea580c', '#16a34a', '#db2777', '#4f46e5', '#ca8a04', '#64748b'];
 const STRATEGY_LABEL = { front: '盡量前排', back: '盡量後排', spread: '彼此分散', none: '僅標示' };
 const PREF_LABEL = { any: '不限', front: '盡量前排', back: '盡量後排' };
+const HLEVEL_LABEL = { short: '矮', mid: '普', tall: '高' };
+const HLEVEL_TARGET = { short: 0.15, mid: 0.5, tall: 0.85 };
+/** 身高顯示文字：有公分顯示公分，否則顯示高／普／矮 */
+const heightText = (s) => (s.height ? `${s.height}` : s.hlevel ? HLEVEL_LABEL[s.hlevel] : '');
 const HPREF_LABEL = { any: '不限', outer: '盡量外側', center: '盡量中間' };
 const LAYOUT_LABEL = { rows: '直排', groups: '分組', u: 'ㄇ字型' };
 // 座位圖（type: 'map'）：自己存的桌椅位置，可以有很多張，例如「本班」「段考」
@@ -46,7 +50,7 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 function newStudent(no) {
   return {
-    id: uid(), no, name: '學生' + no, gender: '', myopia: false, height: '', note: '',
+    id: uid(), no, name: '學生' + no, gender: '', myopia: false, height: '', hlevel: '', note: '',
     tags: [], avoidAdj: [], avoidGroup: [], preferGroup: [], pref: 'any', hpref: 'any',
   };
 }
@@ -348,6 +352,8 @@ function buildModel() {
   const withH = studs.map((s, i) => ({ i, h: parseFloat(s.height) })).filter((o) => o.h > 0).sort((a, b) => a.h - b.h);
   const hTarget = new Float64Array(studs.length).fill(-1);
   withH.forEach((o, r) => { hTarget[o.i] = withH.length > 1 ? r / (withH.length - 1) : 0.5; });
+  // 只選了高／普／矮的同學，用對應的前後位置
+  studs.forEach((s, i) => { if (hTarget[i] < 0 && HLEVEL_TARGET[s.hlevel] !== undefined) hTarget[i] = HLEVEL_TARGET[s.hlevel]; });
 
   const pairList = (key) => {
     const out = [];
@@ -612,7 +618,7 @@ function renderConditions() {
   const c = state.conditions;
   const defs = [
     ['myopia', '👓 視力', '近視坐前排', '近視的同學優先安排在前排'],
-    ['height', '📏 身高', '矮前高後', '矮的同學坐前面、高的坐後面（需填身高）'],
+    ['height', '📏 身高', '矮前高後', '矮的同學坐前面、高的坐後面（填公分或選高／普／矮）'],
     ['gender', '⚥ 性別', '男女交錯', '直排／ㄇ字型：左右男女交錯；分組：各組男女人數平均'],
   ];
   $('#builtinConds').innerHTML = defs.map(([k, title, short, desc]) => `
@@ -685,7 +691,13 @@ function renderTable() {
           <button data-gender="M" class="${s.gender === 'M' ? 'on' : ''}">男</button><button data-gender="F" class="${s.gender === 'F' ? 'on' : ''}">女</button>
         </span>
         <label class="sc-pill ${s.myopia ? 'on' : ''}"><input type="checkbox" data-f="myopia" ${s.myopia ? 'checked' : ''}>👓 近視</label>
-        <label class="sc-height"><input type="number" min="80" max="220" placeholder="身高" value="${esc(s.height)}" data-f="height" aria-label="身高">cm</label>
+      </div>
+      <div class="sc-hrow">
+        <span class="sc-hk">身高</span>
+        <span class="sc-hseg" role="group" aria-label="身高等級">${Object.entries(HLEVEL_LABEL).map(([k, v]) =>
+          `<button data-hlevel="${k}" class="${s.hlevel === k && !s.height ? 'on' : ''}">${v}</button>`).join('')}</span>
+        <span class="sc-or">或</span>
+        <label class="sc-height"><input type="number" min="80" max="220" placeholder="公分" value="${esc(s.height)}" data-f="height" aria-label="身高（公分）">cm</label>
       </div>
       <input class="sc-note" type="text" value="${esc(s.note)}" placeholder="備註…" data-f="note" aria-label="備註">
       <div class="sc-foot">
@@ -816,6 +828,11 @@ function bindStudentsPanel() {
     if (!card || !f || f === 'myopia') return;
     const s = studentById(card.dataset.sid);
     s[f] = f === 'no' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value;
+    if (f === 'height' && s.height) {
+      // 填了公分就以公分為準
+      s.hlevel = '';
+      $$('[data-hlevel]', card).forEach((b) => b.classList.remove('on'));
+    }
     save();
   });
   grid.addEventListener('change', (e) => {
@@ -836,6 +853,12 @@ function bindStudentsPanel() {
       if (s.gender) card.classList.add('g-' + s.gender);
       $$('[data-gender]', card).forEach((b) => b.classList.toggle('on', s.gender === b.dataset.gender));
       renderStats(); save();
+    } else if (btn.dataset.hlevel) {
+      s.hlevel = s.hlevel === btn.dataset.hlevel && !s.height ? '' : btn.dataset.hlevel;
+      s.height = '';
+      $('[data-f="height"]', card).value = '';
+      $$('[data-hlevel]', card).forEach((b) => b.classList.toggle('on', s.hlevel === b.dataset.hlevel));
+      save();
     } else if ('openRules' in btn.dataset) {
       openRuleDialog(s.id);
     } else if ('remove' in btn.dataset) {
@@ -971,6 +994,7 @@ function bindStudentsPanel() {
         else if (/^(女|F|f|girl)$/.test(tk)) st.gender = 'F';
         else if (/^近視$/.test(tk)) st.myopia = true;
         else if (/^\d{2,3}(\.\d+)?$/.test(tk) && Number(tk) >= 80) st.height = Number(tk);
+        else if (/^(高|普|中|矮)$/.test(tk)) st.hlevel = { 高: 'tall', 普: 'mid', 中: 'mid', 矮: 'short' }[tk];
         else rest.push(tk);
       }
       if (rest.length) st.name = rest.join(' ');
@@ -1175,7 +1199,7 @@ function renderRoom() {
     let inner;
     if (st) {
       const tags = st.tags.map((tid) => { const t = tagById(tid); return t ? `<span class="d-tag" style="background:${tagColor(tid)}" title="${esc(t.name)}">${esc(t.name.slice(0, 1))}</span>` : ''; }).join('');
-      const badges = `${st.myopia ? '<span title="近視">👓</span>' : ''}${st.height ? `<span>${esc(st.height)}</span>` : ''}${tags}`;
+      const badges = `${st.myopia ? '<span title="近視">👓</span>' : ''}${heightText(st) ? `<span>${esc(heightText(st))}</span>` : ''}${tags}`;
       inner = `<span class="d-no">${esc(st.no)}</span><span class="d-name">${esc(st.name)}</span>
         ${badges ? `<div class="d-badges">${badges}</div>` : ''}
         <button class="lock" data-lock title="${lockedSet.has(st.id) ? '解除鎖定' : '鎖定此座位'}">${lockedSet.has(st.id) ? '🔒' : '🔓'}</button>`;
@@ -1327,7 +1351,7 @@ function renderSelInfo() {
   const tags = s.tags.map((t) => tagById(t)?.name).filter(Boolean).map(esc).join('、') || '—';
   box.innerHTML = `<dl>
     <dt>學生</dt><dd><strong>${esc(s.no)}. ${esc(s.name)}</strong> ${s.gender === 'M' ? '（男）' : s.gender === 'F' ? '（女）' : ''}</dd>
-    <dt>近視／身高</dt><dd>${s.myopia ? '近視' : '—'}／${s.height ? esc(s.height) + ' cm' : '—'}</dd>
+    <dt>近視／身高</dt><dd>${s.myopia ? '近視' : '—'}／${s.height ? esc(s.height) + ' cm' : s.hlevel ? HLEVEL_LABEL[s.hlevel] : '—'}</dd>
     <dt>座位偏好</dt><dd>前後：${PREF_LABEL[s.pref]}；左右：${HPREF_LABEL[s.hpref || 'any']}</dd>
     <dt>不可相鄰</dt><dd>${names(s.avoidAdj)}</dd>
     <dt>不可同組</dt><dd>${names(s.avoidGroup)}</dd>
