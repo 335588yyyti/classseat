@@ -15,9 +15,9 @@ const WEIGHT_LABEL = { 1: '低', 2: '中', 3: '高' };
 const TAG_COLORS = ['#7c3aed', '#0891b2', '#ea580c', '#16a34a', '#db2777', '#4f46e5', '#ca8a04', '#64748b'];
 const STRATEGY_LABEL = { front: '盡量前排', back: '盡量後排', spread: '彼此分散', none: '僅標示' };
 const PREF_LABEL = { any: '不限', front: '盡量前排', back: '盡量後排' };
-const HLEVEL_LABEL = { short: '矮', mid: '普', tall: '高' };
-const HLEVEL_TARGET = { short: 0.15, mid: 0.5, tall: 0.85 };
-/** 身高顯示文字：有公分顯示公分，否則顯示高／普／矮 */
+const HLEVEL_LABEL = { short: '矮', midshort: '中矮', mid: '中', midtall: '中高', tall: '高' };
+const HLEVEL_TARGET = { short: 0.1, midshort: 0.3, mid: 0.5, midtall: 0.7, tall: 0.9 };
+/** 身高顯示文字：有公分顯示公分，否則顯示身高等級 */
 const heightText = (s) => (s.height ? `${s.height}` : s.hlevel ? HLEVEL_LABEL[s.hlevel] : '');
 const HPREF_LABEL = { any: '不限', outer: '盡量外側', center: '盡量中間' };
 const LAYOUT_LABEL = { rows: '直排', groups: '分組', u: 'ㄇ字型' };
@@ -352,7 +352,7 @@ function buildModel() {
   const withH = studs.map((s, i) => ({ i, h: parseFloat(s.height) })).filter((o) => o.h > 0).sort((a, b) => a.h - b.h);
   const hTarget = new Float64Array(studs.length).fill(-1);
   withH.forEach((o, r) => { hTarget[o.i] = withH.length > 1 ? r / (withH.length - 1) : 0.5; });
-  // 只選了高／普／矮的同學，用對應的前後位置
+  // 只選了身高等級（矮～高）的同學，用對應的前後位置
   studs.forEach((s, i) => { if (hTarget[i] < 0 && HLEVEL_TARGET[s.hlevel] !== undefined) hTarget[i] = HLEVEL_TARGET[s.hlevel]; });
 
   const pairList = (key) => {
@@ -618,7 +618,7 @@ function renderConditions() {
   const c = state.conditions;
   const defs = [
     ['myopia', '👓 視力', '近視坐前排', '近視的同學優先安排在前排'],
-    ['height', '📏 身高', '矮前高後', '矮的同學坐前面、高的坐後面（填公分或選高／普／矮）'],
+    ['height', '📏 身高', '矮前高後', '矮的同學坐前面、高的坐後面（填公分或選 矮／中矮／中／中高／高）'],
     ['gender', '⚥ 性別', '男女交錯', '直排／ㄇ字型：左右男女交錯；分組：各組男女人數平均'],
   ];
   $('#builtinConds').innerHTML = defs.map(([k, title, short, desc]) => `
@@ -994,7 +994,7 @@ function bindStudentsPanel() {
         else if (/^(女|F|f|girl)$/.test(tk)) st.gender = 'F';
         else if (/^近視$/.test(tk)) st.myopia = true;
         else if (/^\d{2,3}(\.\d+)?$/.test(tk) && Number(tk) >= 80) st.height = Number(tk);
-        else if (/^(高|普|中|矮)$/.test(tk)) st.hlevel = { 高: 'tall', 普: 'mid', 中: 'mid', 矮: 'short' }[tk];
+        else if (/^(高|中高|普|中|中矮|矮)$/.test(tk)) st.hlevel = { 高: 'tall', 中高: 'midtall', 普: 'mid', 中: 'mid', 中矮: 'midshort', 矮: 'short' }[tk];
         else rest.push(tk);
       }
       if (rest.length) st.name = rest.join(' ');

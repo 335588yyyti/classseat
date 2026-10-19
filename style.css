@@ -154,7 +154,7 @@ select.w-sel { padding: 2px 6px; font-size: 13px; }
 .sc-hrow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .sc-hk, .sc-or { font-size: 12.5px; color: var(--muted); }
 .sc-hseg { display: inline-flex; border: 1.5px solid var(--line); border-radius: 16px; overflow: hidden; background: var(--card); }
-.sc-hseg button { border: 0; background: none; padding: 4px 11px; font-size: 13px; cursor: pointer; color: #4b5563; }
+.sc-hseg button { border: 0; background: none; padding: 4px 8px; white-space: nowrap; font-size: 13px; cursor: pointer; color: #4b5563; }
 .sc-hseg button + button { border-left: 1px solid var(--line); }
 .sc-hseg button.on { background: var(--accent); color: #fff; font-weight: 600; }
 .sc-height { display: inline-flex; align-items: center; gap: 3px; font-size: 12.5px; color: var(--muted); }
