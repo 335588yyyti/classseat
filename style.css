@@ -311,3 +311,55 @@ dialog::backdrop { background: rgba(0,0,0,.35); }
   .desk { box-shadow: none !important; transform: none !important; }
   .desk.locked { background: var(--desk); }
 }
+
+/* ---------- 抽籤動畫 ---------- */
+.draw-btn { border-color: #e0b24a; background: #fff8e6; }
+.draw-btn:hover { background: #fdefc8; }
+.draw-speeds { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+body.is-drawing .toolbar-card, body.is-drawing .side, body.is-drawing .tabs, body.is-drawing #room { pointer-events: none; }
+body.is-drawing .toolbar-card { opacity: .5; }
+.desk.draw-hidden { background: linear-gradient(135deg, #fef3c7, #fde68a); border-color: #f0c64e; border-style: solid; color: #92400e; cursor: default; }
+.desk.draw-hidden .d-name { font-size: 18px !important; }
+.desk.draw-next { box-shadow: 0 0 0 4px #f59e0b, 0 0 18px rgba(245, 158, 11, .6); transform: scale(1.06); z-index: 3; }
+.desk.draw-pop { animation: drawPop .45s ease-out; z-index: 2; }
+@keyframes drawPop {
+  0% { transform: scale(.6); box-shadow: 0 0 0 6px #f59e0b; }
+  60% { transform: scale(1.15); box-shadow: 0 0 0 6px #fcd34d; }
+  100% { transform: scale(1); box-shadow: none; }
+}
+.draw-stage {
+  position: fixed; right: 24px; bottom: 24px; z-index: 150; width: 230px; padding: 14px 16px 14px;
+  border-radius: 18px; background: #2b1d16; color: #fff; text-align: center;
+  box-shadow: 0 16px 40px rgba(0,0,0,.4); display: flex; flex-direction: column; align-items: center; gap: 6px;
+}
+.draw-stage[hidden] { display: none; }
+.draw-label { font-size: 13px; color: #fcd34d; letter-spacing: .08em; min-height: 18px; }
+.qian { position: relative; width: 150px; height: 360px; }
+/* 籤筒 */
+.qian-tube { position: absolute; left: 25px; bottom: 0; width: 100px; height: 190px; transform-origin: 50% 100%; z-index: 2; }
+.qian-tube.shake { animation: qianShake .16s ease-in-out infinite alternate; }
+@keyframes qianShake { from { transform: rotate(-9deg) translateX(-3px); } to { transform: rotate(9deg) translateX(3px); } }
+.qian-sticks { position: absolute; left: 10px; right: 10px; top: -40px; height: 70px; display: flex; justify-content: space-around; align-items: flex-end; }
+.qian-sticks i { display: block; width: 8px; height: var(--h); border-radius: 3px 3px 0 0; transform: rotate(var(--r)); transform-origin: 50% 100%;
+  background: linear-gradient(90deg, #d9b56c, #f3dc9e 45%, #c9a050); box-shadow: inset 0 3px 0 #b91c1c; }
+.qian-body { position: absolute; inset: 20px 0 0; border-radius: 10px 10px 16px 16px;
+  background: linear-gradient(90deg, #7f1d1d, #c0392b 30%, #dc4b3c 50%, #b3261e 75%, #7f1d1d);
+  border-top: 6px solid #e8b84a; border-bottom: 8px solid #e8b84a; display: flex; align-items: center; justify-content: center;
+  box-shadow: inset 0 -10px 18px rgba(0,0,0,.25); }
+.qian-body span { width: 52px; height: 52px; border-radius: 50%; background: #f6d36b; color: #7f1d1d; font-size: 30px; font-weight: 900;
+  display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 3px #b91c1c, 0 0 0 5px #f6d36b; }
+/* 跳出來的籤 */
+.qian-out { position: absolute; left: 50%; bottom: 120px; width: 42px; height: 200px; margin-left: -21px; z-index: 1;
+  border-radius: 6px 6px 3px 3px; background: linear-gradient(90deg, #d9b56c, #f8e7b5 45%, #d2a95a);
+  border-top: 8px solid #b91c1c; color: #5b1a0e; display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 6px;
+  opacity: 0; transform: translateY(90px); pointer-events: none; }
+.qian-out.rise { animation: qianRise .5s cubic-bezier(.2,1.4,.4,1) forwards; }
+@keyframes qianRise { 0% { opacity: 1; transform: translateY(120px) rotate(0); } 100% { opacity: 1; transform: translateY(-30px) rotate(-4deg); } }
+.qian-no { flex: none; order: 2; font-size: 11px; writing-mode: vertical-rl; color: #b91c1c; font-weight: 700; }
+.qian-name { flex: none; order: 1; display: flex; flex-direction: column; align-items: center; line-height: 1.08; font-weight: 900; text-shadow: 0 1px 0 rgba(255,255,255,.5); max-height: 112px; overflow: hidden; }
+.draw-stage .btn { background: transparent; color: #e5e7eb; border-color: #6b4f3f; }
+.draw-stage .btn:hover { background: #3d2a20; }
+@media (max-width: 640px) {
+  .draw-stage { right: 50%; transform: translateX(50%) scale(.85); transform-origin: 50% 100%; bottom: 10px; }
+}
+@media print { .draw-stage { display: none !important; } }

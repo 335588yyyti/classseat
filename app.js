@@ -1228,6 +1228,95 @@ function renderRoom() {
   $('#printTitle').textContent = `${state.className || ''} 座位表`.trim();
 }
 
+/* ---------- 抽籤動畫 ---------- */
+const DRAW_DELAY = { fast: 150, mid: 450, slow: 1000 };
+
+async function runDraw({ useConditions, speed, order }) {
+  if (ui.drawing) return;
+  pushHistory();
+  optimize(useConditions);
+  save();
+  renderSeatsPanel();
+
+  const locked = new Set(state.locked);
+  const targets = seatOrder(state.seats).filter((s) => state.assign[s.id] && !locked.has(state.assign[s.id]));
+  if (!targets.length) { toast('沒有可以抽籤的學生（全部都鎖定了）'); return; }
+  if (order === 'random') {
+    for (let i = targets.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [targets[i], targets[j]] = [targets[j], targets[i]]; }
+  }
+  const names = targets.map((s) => studentById(state.assign[s.id])?.name || '');
+  const delay = DRAW_DELAY[speed] || DRAW_DELAY.mid;
+  const run = (ui.drawing = { skip: false });
+  const wait = (ms) => new Promise((r) => setTimeout(r, run.skip ? 0 : ms));
+  const pick = () => names[(Math.random() * names.length) | 0];
+
+  // 先把結果藏起來，記下每張桌子揭曉後的樣子
+  const desks = targets.map((s) => {
+    const el = $(`#room .desk[data-seat="${s.id}"]`);
+    const saved = { el, cls: el.className, html: el.innerHTML };
+    el.className = 'desk draw-hidden';
+    el.innerHTML = '<span class="d-name">？</span>';
+    return saved;
+  });
+  document.body.classList.add('is-drawing');
+  const banner = $('#drawBanner');
+  const tube = $('#drawTube'), stick = $('#drawStick');
+  banner.hidden = false;
+  const setLabel = (t) => { $('#drawLabel').textContent = t; };
+  const shake = (on) => tube.classList.toggle('shake', on);
+  const showStick = (no, name) => {
+    // 直書：一個字一行（長名字自動縮小）
+    const chars = [...name];
+    const el = $('#drawName');
+    el.innerHTML = chars.map((ch) => `<span>${esc(ch)}</span>`).join('');
+    el.style.fontSize = (chars.length <= 4 ? 22 : chars.length <= 6 ? 16 : 11) + 'px';
+    $('#drawNo').textContent = no;
+    stick.classList.remove('rise');
+    void stick.offsetWidth; // 重新觸發動畫
+    stick.classList.add('rise');
+  };
+  stick.classList.remove('rise');
+
+  // 搖籤筒：名字在座位上快速跳動
+  setLabel('搖一搖籤筒…');
+  shake(true);
+  const t0 = performance.now();
+  while (!run.skip && performance.now() - t0 < 1400) {
+    desks.forEach((d) => { d.el.querySelector('.d-name').textContent = pick(); });
+    await wait(70);
+  }
+  desks.forEach((d) => { d.el.querySelector('.d-name').textContent = '？'; });
+
+  // 一支一支抽出來
+  for (let i = 0; i < desks.length; i++) {
+    const d = desks[i];
+    if (!run.skip) {
+      d.el.classList.add('draw-next');
+      setLabel(`抽第 ${i + 1} 支籤（共 ${desks.length} 支）`);
+      stick.classList.remove('rise');
+      shake(true);
+      await wait(delay * 0.6);
+      shake(false);
+      showStick(`第${i + 1}籤`, names[i]);
+    }
+    d.el.className = d.cls + (run.skip ? '' : ' draw-pop');
+    d.el.innerHTML = d.html;
+    await wait(delay * 0.4 + (run.skip ? 0 : 250));
+  }
+  shake(false);
+
+  setLabel('抽籤完成 🎉');
+  if (!run.skip) showStick('完', `共${desks.length}位`);
+  await wait(1200);
+  banner.hidden = true;
+  stick.classList.remove('rise');
+  document.body.classList.remove('is-drawing');
+  ui.drawing = null;
+  renderSeatsPanel();
+  const errs = evaluate().items.filter((x) => x.level === 'err').length;
+  toast(useConditions && errs ? `抽籤完成，但有 ${errs} 項規則無法同時滿足` : '抽籤完成 🎉');
+}
+
 /** 名字字體依桌子寬度自動放大／縮小 */
 function fitNames() {
   const els = $$('#room .d-name');
@@ -1407,6 +1496,14 @@ function bindSeatsPanel() {
     toast(`已切換為${LAYOUT_LABEL[t]}，可按「依條件自動排座」重新安排`);
   });
   $('#mapDialog').addEventListener('close', () => { if ($('#mapDialog').returnValue === 'ok') createMap(); });
+  $('#btnDraw').addEventListener('click', () => { if (!ui.drawing) $('#drawDialog').showModal(); });
+  $('#drawDialog').addEventListener('close', () => {
+    if ($('#drawDialog').returnValue !== 'ok') return;
+    const val = (n) => $(`#drawDialog input[name="${n}"]:checked`)?.value;
+    runDraw({ useConditions: val('drawMode') === 'cond', speed: val('drawSpeed') || 'mid', order: val('drawOrder') || 'front' });
+  });
+  $('#drawSkip').addEventListener('click', () => { if (ui.drawing) ui.drawing.skip = true; });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && ui.drawing) ui.drawing.skip = true; });
   $('#layoutOpts').addEventListener('click', (e) => {
     if (e.target.closest('[data-save-custom]')) openMapDialog('copy');
   });
