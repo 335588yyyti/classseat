@@ -70,6 +70,8 @@ function defaultState() {
     },
     layout: { type: 'map', mapId: 'class', cols: 6, paired: true, groups: 6 },
     maps: [{ id: 'class', name: '本班', seats: CLASS_LAYOUT.map((p) => ({ ...p })) }],
+    // 老師暗中安排：fixed 座位→一定抽到的學生；ban 座位→一定不會抽到的學生；apart 不能坐隔壁的兩人
+    secret: { fixed: {}, ban: {}, apart: [] },
     seats: [],
     assign: {}, // seatId -> studentId
     locked: [], // studentIds
@@ -114,6 +116,7 @@ function normalize(data) {
   if (s.layout.type === 'map' && !s.maps.some((m) => m.id === s.layout.mapId)) {
     if (s.maps.length) s.layout.mapId = s.maps[0].id; else s.layout.type = 'rows';
   }
+  s.secret = { fixed: {}, ban: {}, apart: [], ...(data.secret || {}) };
   delete s.customLayout;
   delete s.freeLayout;
   s.assign = data.assign && typeof data.assign === 'object' ? data.assign : {};
@@ -141,7 +144,7 @@ function toast(msg) {
 }
 
 function pushHistory() {
-  ui.history.push(JSON.stringify({ seats: state.seats, assign: state.assign, locked: state.locked, layout: state.layout, custom: state.custom, maps: state.maps }));
+  ui.history.push(JSON.stringify({ seats: state.seats, assign: state.assign, locked: state.locked, layout: state.layout, custom: state.custom, maps: state.maps, secret: state.secret }));
   if (ui.history.length > 30) ui.history.shift();
 }
 
@@ -255,13 +258,33 @@ function uShape(n) {
 
 /** 依目前版型重建桌椅，學生依原本的前後順序放入新座位 */
 function relayout() {
-  const order = seatOrder(state.seats).map((s) => state.assign[s.id]).filter(Boolean);
+  const oldSeats = seatOrder(state.seats);
+  const order = oldSeats.map((s) => state.assign[s.id]).filter(Boolean);
   const seen = new Set(order);
   for (const s of sortedStudents()) if (!seen.has(s.id)) order.push(s.id);
   state.seats = generateSeats(state.students.length, state.layout);
   state.assign = {};
-  seatOrder(state.seats).forEach((seat, i) => { if (order[i]) state.assign[seat.id] = order[i]; });
+  const newSeats = seatOrder(state.seats);
+  newSeats.forEach((seat, i) => { if (order[i]) state.assign[seat.id] = order[i]; });
+  // 暗中安排跟著座位順序搬到新座位
+  const move = Object.fromEntries(oldSeats.map((s, i) => [s.id, newSeats[i]?.id]));
+  const remap = (obj) => Object.fromEntries(Object.entries(obj).filter(([k]) => move[k]).map(([k, v]) => [move[k], v]));
+  state.secret.fixed = remap(state.secret.fixed);
+  state.secret.ban = remap(state.secret.ban);
   state.custom = false;
+}
+
+/** 移除已不存在的學生／座位 */
+function cleanupSecret() {
+  const sec = state.secret;
+  const sids = new Set(state.students.map((s) => s.id));
+  const seatIds = new Set(state.seats.map((s) => s.id));
+  for (const [k, v] of Object.entries(sec.fixed)) if (!seatIds.has(k) || !sids.has(v)) delete sec.fixed[k];
+  for (const [k, v] of Object.entries(sec.ban)) {
+    const keep = (v || []).filter((x) => sids.has(x));
+    if (!seatIds.has(k) || !keep.length) delete sec.ban[k]; else sec.ban[k] = keep;
+  }
+  sec.apart = sec.apart.filter(([a, b]) => sids.has(a) && sids.has(b) && a !== b);
 }
 
 function seatOrder(seats) {
@@ -447,7 +470,20 @@ function buildModel() {
     return t;
   }
 
-  return { geo, idx, cost };
+  // 老師暗中安排（一定不會抽到、不能坐隔壁）
+  const seatIdx = new Map(seats.map((x, i) => [x.id, i]));
+  const banList = Object.entries(state.secret.ban)
+    .map(([k, v]) => [seatIdx.get(k), new Set(v.map((x) => idx.get(x)).filter((x) => x !== undefined))])
+    .filter(([si, set]) => si !== undefined && set.size);
+  const apart = state.secret.apart.map(([a, b]) => [idx.get(a), idx.get(b)]).filter(([a, b]) => a !== undefined && b !== undefined);
+  function secretCost(occ, pos) {
+    let t = 0;
+    for (const [si, set] of banList) if (occ[si] >= 0 && set.has(occ[si])) t += 5000;
+    for (const [a, b] of apart) if (geo.adj[pos[a] * geo.N + pos[b]]) t += 5000;
+    return t;
+  }
+
+  return { geo, idx, cost, secretCost, hasSecret: banList.length + apart.length > 0 };
 }
 
 function optimize(useConditions = true) {
@@ -460,12 +496,18 @@ function optimize(useConditions = true) {
 
   const baseOcc = new Int32Array(N).fill(-1);
   const fixedSeats = new Set();
+  const taken = new Set();
+  // 老師內定的座位優先，其次才是鎖定的座位
+  for (const [sid, stid] of Object.entries(state.secret.fixed)) {
+    const si = seatIndex.get(sid), st = model.idx.get(stid);
+    if (si === undefined || st === undefined || taken.has(st)) continue;
+    baseOcc[si] = st; fixedSeats.add(si); taken.add(st);
+  }
   for (const [sid, stid] of Object.entries(state.assign)) {
     if (!locked.has(stid)) continue;
     const si = seatIndex.get(sid), st = model.idx.get(stid);
-    if (si === undefined || st === undefined) continue;
-    baseOcc[si] = st;
-    fixedSeats.add(si);
+    if (si === undefined || st === undefined || fixedSeats.has(si) || taken.has(st)) continue;
+    baseOcc[si] = st; fixedSeats.add(si); taken.add(st);
   }
   const movable = [];
   for (let i = 0; i < N; i++) if (!fixedSeats.has(i)) movable.push(i);
@@ -484,13 +526,15 @@ function optimize(useConditions = true) {
     return { occ, pos };
   }
 
+  // 完全隨機時只看老師的暗中安排；依條件時兩者都看
+  const costFn = useConditions ? (o, p) => model.cost(o, p) + model.secretCost(o, p) : model.secretCost;
   let best = initial();
-  if (useConditions && movable.length > 1) {
-    let bestCost = model.cost(best.occ, best.pos);
-    const runs = 4, iters = 16000;
-    for (let r = 0; r < runs; r++) {
+  if ((useConditions || model.hasSecret) && movable.length > 1) {
+    let bestCost = costFn(best.occ, best.pos);
+    const runs = useConditions ? 4 : 3, iters = useConditions ? 16000 : 8000;
+    for (let r = 0; r < runs && !(bestCost === 0 && !useConditions); r++) {
       const { occ, pos } = initial();
-      let cur = model.cost(occ, pos);
+      let cur = costFn(occ, pos);
       for (let it = 0; it < iters; it++) {
         const T = 60 * Math.pow(0.0008, it / iters);
         const a = movable[(Math.random() * movable.length) | 0];
@@ -501,10 +545,11 @@ function optimize(useConditions = true) {
         occ[a] = sb; occ[b] = sa;
         if (sa >= 0) pos[sa] = b;
         if (sb >= 0) pos[sb] = a;
-        const nc = model.cost(occ, pos);
+        const nc = costFn(occ, pos);
         if (nc <= cur || Math.random() < Math.exp((cur - nc) / T)) {
           cur = nc;
           if (cur < bestCost) { bestCost = cur; best = { occ: Int32Array.from(occ), pos: Int32Array.from(pos) }; }
+          if (bestCost === 0 && !useConditions) break;
         } else {
           occ[a] = sa; occ[b] = sb;
           if (sa >= 0) pos[sa] = a;
@@ -515,6 +560,29 @@ function optimize(useConditions = true) {
   }
   state.assign = {};
   best.occ.forEach((st, si) => { if (st >= 0) state.assign[seats[si].id] = studs[st].id; });
+  ui.secretStatus = secretViolations().length;
+}
+
+/** 暗中安排沒做到的項目（只在暗中安排模式顯示） */
+function secretViolations() {
+  const out = [];
+  const sec = state.secret;
+  const nm = (id) => studentById(id)?.name || '';
+  const geo = geometry();
+  const seatI = Object.fromEntries(state.seats.map((x, i) => [x.id, i]));
+  const posOf = Object.fromEntries(Object.entries(state.assign).map(([k, v]) => [v, seatI[k]]));
+  for (const [k, v] of Object.entries(sec.fixed)) if (state.assign[k] !== v) out.push({ seat: k, text: `#${seatNo(k)} 應該是 ${nm(v)}` });
+  for (const [k, v] of Object.entries(sec.ban)) if (v.includes(state.assign[k])) out.push({ seat: k, text: `#${seatNo(k)} 不該是 ${nm(state.assign[k])}` });
+  for (const [a, b] of sec.apart) {
+    const pa = posOf[a], pb = posOf[b];
+    if (pa !== undefined && pb !== undefined && geo.adj[pa * geo.N + pb]) out.push({ seat: state.seats[pa].id, seat2: state.seats[pb].id, text: `${nm(a)} 和 ${nm(b)} 坐在隔壁` });
+  }
+  return out;
+}
+
+/** 座位編號（依前後、左右順序） */
+function seatNo(seatId) {
+  return seatOrder(state.seats).findIndex((x) => x.id === seatId) + 1;
 }
 
 /* =========================================================
@@ -581,6 +649,12 @@ function evaluate() {
           warnSeats.add(seats[a].id); warnSeats.add(seats[b].id);
         }
       }
+    }
+  }
+  if (ui.secretMode) {
+    for (const v of secretViolations()) {
+      items.push({ level: 'err', text: '🤫 ' + v.text });
+      errSeats.add(v.seat); if (v.seat2) errSeats.add(v.seat2);
     }
   }
   items.sort((a, b) => (a.level === 'err' ? 0 : 1) - (b.level === 'err' ? 0 : 1));
@@ -1028,6 +1102,9 @@ function renderSeatsPanel() {
   renderLayoutOpts();
   renderRoom();
   renderLegend();
+  $('#btnSecret').classList.toggle('on', !!ui.secretMode);
+  $('#secretCard').hidden = !ui.secretMode;
+  if (ui.secretMode) renderSecret();
 }
 
 function renderLayoutOpts() {
@@ -1151,6 +1228,8 @@ function renderRoom() {
   room.style.width = W + 'px';
   room.style.height = H + 'px';
   room.classList.toggle('move-mode', state.mode === 'move');
+  room.classList.toggle('secret-mode', !!ui.secretMode);
+  cleanupSecret();
 
   const ev = evaluate();
   const lockedSet = new Set(state.locked);
@@ -1182,6 +1261,7 @@ function renderRoom() {
     }
   }
 
+  const seatNoMap = Object.fromEntries(seatOrder(state.seats).map((x, i) => [x.id, i + 1]));
   for (const seat of state.seats) {
     const v = toView(seat.x, seat.y, b, pad);
     const st = studentById(state.assign[seat.id]);
@@ -1210,6 +1290,12 @@ function renderRoom() {
       inner += '<button class="del" data-del-desk title="刪除這個座位">×</button>';
       if (groupNum(seat.group)) inner += `<span class="d-grp">${groupNum(seat.group)}組</span>`;
     }
+    if (ui.secretMode) {
+      inner += `<span class="d-seatno">#${seatNoMap[seat.id]}</span>`;
+      const fx = state.secret.fixed[seat.id], bn = state.secret.ban[seat.id];
+      if (fx) { cls.push('sec-fixed'); inner += `<span class="d-sec" title="內定：${esc(studentById(fx)?.name)}">🤫 ${esc(studentById(fx)?.name)}</span>`; }
+      else if (bn?.length) { cls.push('sec-ban'); inner += `<span class="d-sec ban" title="不會抽到 ${bn.length} 人">🚫 ${bn.length}</span>`; }
+    }
     html += `<div class="${cls.join(' ')}" data-seat="${seat.id}" style="left:${v.x}px;top:${v.y}px">${inner}</div>`;
   }
   room.innerHTML = html;
@@ -1228,11 +1314,109 @@ function renderRoom() {
   $('#printTitle').textContent = `${state.className || ''} 座位表`.trim();
 }
 
+/* ---------- 老師暗中安排 ---------- */
+function renderSecret() {
+  const sec = state.secret;
+  const nm = (id) => esc(studentById(id)?.name || '');
+  const fixedOf = Object.fromEntries(Object.entries(sec.fixed).map(([k, v]) => [v, k]));
+  const studOpts = (exclude = new Set(), note = false) => sortedStudents().filter((x) => !exclude.has(x.id))
+    .map((x) => `<option value="${x.id}">${esc(x.no)}. ${esc(x.name)}${note && fixedOf[x.id] ? `（已內定 #${seatNo(fixedOf[x.id])}）` : ''}</option>`).join('');
+  const seat = state.seats.find((x) => x.id === ui.selSeat);
+  let seatHtml = '<p class="hint">點一下座位，設定這個座位「一定抽到」或「一定不會抽到」誰。</p>';
+  if (seat) {
+    const fx = sec.fixed[seat.id] || '';
+    const bans = sec.ban[seat.id] || [];
+    const now = state.assign[seat.id];
+    seatHtml = `<div class="sec-seat">
+      <div class="sec-title">座位 #${seatNo(seat.id)}${groupNum(seat.group) ? `（第 ${groupNum(seat.group)} 組）` : ''}<span class="hint">目前：${now ? nm(now) : '空位'}</span></div>
+      <label class="sec-row"><span>一定抽到</span><select data-sec-fixed><option value="">不指定</option>${studOpts(new Set(), true)}</select></label>
+      <div class="sec-row"><span>一定不會抽到</span><div class="sec-chips">${bans.map((id) => `<span class="sec-chip">${nm(id)}<button data-sec-unban="${id}" aria-label="移除">×</button></span>`).join('')}
+        <select data-sec-ban><option value="">＋ 加入…</option>${studOpts(new Set([...bans, fx]))}</select></div></div>
+    </div>`;
+    queueMicrotask(() => { const el = $('[data-sec-fixed]'); if (el) el.value = fx; });
+  }
+  const apartHtml = sec.apart.map(([a, b2], i) => `<span class="sec-chip">${nm(a)} ↔ ${nm(b2)}<button data-sec-unapart="${i}" aria-label="移除">×</button></span>`).join('')
+    || '<span class="hint">尚未設定</span>';
+  const list = [
+    ...Object.entries(sec.fixed).map(([k, v]) => ({ k, t: `#${seatNo(k)} 一定是 ${nm(v)}` })),
+    ...Object.entries(sec.ban).map(([k, v]) => ({ k, t: `#${seatNo(k)} 不會是 ${v.map(nm).join('、')}` })),
+  ].sort((x, y) => seatNo(x.k) - seatNo(y.k));
+  const status = ui.secretStatus === undefined ? ''
+    : ui.secretStatus ? `<p class="sec-status warn">⚠ 上次排座有 ${ui.secretStatus} 項安排無法同時做到</p>`
+      : '<p class="sec-status ok">✓ 上次排座全部照安排</p>';
+  $('#secretBody').innerHTML = `
+    <p class="hint">只有開啟 🤫 時看得到，座位表、學生名單和抽籤畫面都不會顯示。下一次 🎰 抽籤、🎲 隨機或自動排座時生效。</p>
+    ${status}
+    ${seatHtml}
+    <div class="sec-block">
+      <div class="sec-title">不能坐隔壁</div>
+      <div class="sec-chips">${apartHtml}</div>
+      <div class="sec-pair"><select data-sec-a><option value="">選同學…</option>${studOpts()}</select><span>和</span>
+        <select data-sec-b><option value="">選同學…</option>${studOpts()}</select><button class="btn small" data-sec-addapart>加入</button></div>
+    </div>
+    <div class="sec-block">
+      <div class="sec-title">全部安排（${list.length + sec.apart.length}）${list.length + sec.apart.length ? '<button class="link-btn" data-sec-clear>全部清除</button>' : ''}</div>
+      ${list.length ? `<ul class="sec-list">${list.map((x) => `<li><button class="link-btn" data-sec-pick="${x.k}">${x.t}</button></li>`).join('')}</ul>` : ''}
+    </div>`;
+}
+
+function bindSecret() {
+  $('#btnSecret').addEventListener('click', () => { ui.secretMode = !ui.secretMode; renderSeatsPanel(); });
+  $('#secretClose').addEventListener('click', () => { ui.secretMode = false; renderSeatsPanel(); });
+  const box = $('#secretBody');
+  const sec = () => state.secret;
+  const done = () => { save(); renderSeatsPanel(); };
+  box.addEventListener('change', (e) => {
+    const seatId = ui.selSeat;
+    const v = e.target.value;
+    if ('secFixed' in e.target.dataset && seatId) {
+      for (const [k, x] of Object.entries(sec().fixed)) if (x === v) delete sec().fixed[k];
+      if (v) {
+        sec().fixed[seatId] = v;
+        if (sec().ban[seatId]) sec().ban[seatId] = sec().ban[seatId].filter((x) => x !== v);
+      } else delete sec().fixed[seatId];
+      done();
+    } else if ('secBan' in e.target.dataset && seatId && v) {
+      sec().ban[seatId] = [...new Set([...(sec().ban[seatId] || []), v])];
+      if (sec().fixed[seatId] === v) delete sec().fixed[seatId];
+      done();
+    }
+  });
+  box.addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    const d = btn.dataset;
+    if (d.secUnban) {
+      const list = (sec().ban[ui.selSeat] || []).filter((x) => x !== d.secUnban);
+      if (list.length) sec().ban[ui.selSeat] = list; else delete sec().ban[ui.selSeat];
+      done();
+    } else if (d.secUnapart !== undefined) {
+      sec().apart.splice(Number(d.secUnapart), 1);
+      done();
+    } else if ('secAddapart' in d) {
+      const a = $('[data-sec-a]').value, b = $('[data-sec-b]').value;
+      if (!a || !b || a === b) { toast('請選兩位不同的同學'); return; }
+      if (!sec().apart.some(([x, y]) => (x === a && y === b) || (x === b && y === a))) sec().apart.push([a, b]);
+      done();
+    } else if (d.secPick) {
+      ui.selSeat = d.secPick;
+      ui.selected = state.assign[d.secPick] || null;
+      renderSeatsPanel();
+    } else if ('secClear' in d) {
+      if (!confirm('清除全部的暗中安排？')) return;
+      state.secret = { fixed: {}, ban: {}, apart: [] };
+      ui.secretStatus = undefined;
+      done();
+    }
+  });
+}
+
 /* ---------- 抽籤動畫 ---------- */
 const DRAW_DELAY = { fast: 150, mid: 450, slow: 1000 };
 
 async function runDraw({ useConditions, speed, order }) {
   if (ui.drawing) return;
+  ui.secretMode = false; // 抽籤時一定藏起暗中安排
   pushHistory();
   optimize(useConditions);
   save();
@@ -1652,6 +1836,7 @@ function bindSeatsPanel() {
       if (e.type === 'pointerup') {
         if (ui.selSeat === d.seatId) { ui.selSeat = null; ui.selected = null; } else { ui.selSeat = d.seatId; ui.selected = sid || null; }
         renderRoom();
+        if (ui.secretMode) renderSecret();
       }
       return;
     }
@@ -1750,5 +1935,6 @@ function bindGlobal() {
 bindGlobal();
 bindStudentsPanel();
 bindSeatsPanel();
+bindSecret();
 ensureSeating();
 showTab(state.tab === 'seats' ? 'seats' : 'students');

@@ -363,3 +363,35 @@ body.is-drawing .toolbar-card { opacity: .5; }
   .draw-stage { right: 50%; transform: translateX(50%) scale(.85); transform-origin: 50% 100%; bottom: 10px; }
 }
 @media print { .draw-stage { display: none !important; } }
+
+/* ---------- 老師暗中安排 ---------- */
+.secret-btn { opacity: .35; border-color: transparent; background: transparent; }
+.secret-btn:hover, .secret-btn.on { opacity: 1; }
+.secret-btn.on { background: #ede9fe; border-color: #a78bfa; }
+.secret-card { border: 2px solid #a78bfa; background: #faf7ff; }
+.secret-card .card-head { margin-bottom: 6px; }
+.secret-card .hint { margin: 0 0 8px; display: block; }
+.room.secret-mode { background-color: #f6f2ff; }
+.desk .d-seatno { position: absolute; left: 4px; bottom: 2px; font-size: 10px; color: #7c3aed; font-weight: 700; line-height: 1; }
+.desk .d-sec { position: absolute; top: -10px; left: 50%; transform: translateX(-50%); white-space: nowrap; font-size: 10.5px; line-height: 1;
+  padding: 3px 6px; border-radius: 8px; background: #7c3aed; color: #fff; z-index: 2; max-width: 110px; overflow: hidden; text-overflow: ellipsis; }
+.desk .d-sec.ban { background: #b91c1c; }
+.desk.sec-fixed { outline: 2px dashed #7c3aed; outline-offset: 2px; }
+.desk.sec-ban { outline: 2px dashed #b91c1c; outline-offset: 2px; }
+.sec-seat, .sec-block { border-top: 1px solid #e4dcfb; padding-top: 10px; margin-top: 10px; display: flex; flex-direction: column; gap: 8px; font-size: 13.5px; }
+.sec-title { font-weight: 700; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.sec-title .hint { margin: 0; display: inline; font-weight: normal; }
+.sec-row { display: flex; flex-direction: column; gap: 4px; }
+.sec-row > span { color: #6b7280; font-size: 12.5px; }
+.sec-row select, .sec-pair select, .sec-chips select { font-size: 13px; padding: 4px 8px; max-width: 100%; }
+.sec-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.sec-chip { display: inline-flex; align-items: center; gap: 2px; background: #ede9fe; color: #4c1d95; border-radius: 12px; padding: 2px 4px 2px 10px; font-size: 12.5px; }
+.sec-chip button { border: 0; background: none; cursor: pointer; color: #7c3aed; font-size: 14px; padding: 0 4px; }
+.sec-pair { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.sec-pair select { flex: 1; min-width: 90px; }
+.sec-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; }
+.sec-list .link-btn { color: #4c1d95; text-align: left; padding: 2px 0; }
+.sec-status { margin: 0 0 4px; font-size: 13px; padding: 6px 10px; border-radius: 8px; }
+.sec-status.ok { background: #e5f5ea; color: #14532d; }
+.sec-status.warn { background: var(--warn-soft); color: #713f12; }
+@media print { .secret-card, .desk .d-sec, .desk .d-seatno { display: none !important; } .desk.sec-fixed, .desk.sec-ban { outline: none; } }
