@@ -438,11 +438,12 @@ function buildModel() {
     for (const [a, b] of avoidGroup) if (sameGroup(pos[a], pos[b])) t += 800;
     for (const [a, b] of preferGroup) if (!sameGroup(pos[a], pos[b])) t += 150;
 
-    if (wG && !isGroups) {
+    // 性別：男生左右兩旁盡量是女生（女生旁邊不限制）
+    if (wG) {
       for (const [a, b] of rowPairs) {
         const sa = occ[a], sb = occ[b];
         if (sa < 0 || sb < 0) continue;
-        if (gender[sa] && gender[sa] === gender[sb]) t += wG * 8;
+        if (gender[sa] === 'M' && gender[sb] === 'M') t += wG * 8;
       }
     }
     if (spreadTags.length) {
@@ -452,18 +453,14 @@ function buildModel() {
         for (const st of spreadTags) if (st.set.has(sa) && st.set.has(sb)) t += st.w * 25;
       }
     }
-    if (isGroups && groupCount && (wG || spreadTags.length)) {
-      const m = new Int16Array(groupCount), fe = new Int16Array(groupCount);
+    if (isGroups && groupCount && spreadTags.length) {
       const tagCnt = spreadTags.map(() => new Int16Array(groupCount));
       for (let s = 0; s < occ.length; s++) {
         const st = occ[s], g = groupIdx[s];
         if (st < 0 || g < 0) continue;
-        if (gender[st] === 'M') m[g]++;
-        else if (gender[st] === 'F') fe[g]++;
         spreadTags.forEach((tg, k) => { if (tg.set.has(st)) tagCnt[k][g]++; });
       }
       for (let g = 0; g < groupCount; g++) {
-        if (wG) t += wG * 8 * Math.max(0, Math.abs(m[g] - fe[g]) - 1);
         spreadTags.forEach((tg, k) => { if (tagCnt[k][g] > 1) t += tg.w * 25 * (tagCnt[k][g] - 1); });
       }
     }
@@ -693,7 +690,7 @@ function renderConditions() {
   const defs = [
     ['myopia', '👓 視力', '近視坐前排', '近視的同學優先安排在前排'],
     ['height', '📏 身高', '矮前高後', '矮的同學坐前面、高的坐後面（填公分或選 矮／中矮／中／中高／高）'],
-    ['gender', '⚥ 性別', '男女交錯', '直排／ㄇ字型：左右男女交錯；分組：各組男女人數平均'],
+    ['gender', '⚥ 性別', '男生旁邊放女生', '男生的左右兩旁盡量安排女生；女生旁邊不限制'],
   ];
   $('#builtinConds').innerHTML = defs.map(([k, title, short, desc]) => `
     <div class="cond ${c[k].on ? '' : 'off'}" title="${desc}">
@@ -1345,7 +1342,7 @@ function renderSecret() {
     : ui.secretStatus ? `<p class="sec-status warn">⚠ 上次排座有 ${ui.secretStatus} 項安排無法同時做到</p>`
       : '<p class="sec-status ok">✓ 上次排座全部照安排</p>';
   $('#secretBody').innerHTML = `
-    <p class="hint">只有開啟 🤫 時看得到，座位表、學生名單和抽籤畫面都不會顯示。下一次 🎰 抽籤、🎲 隨機或自動排座時生效。</p>
+    <p class="hint">只有按工具列的「說明」開啟時看得到，座位表、學生名單和抽籤畫面都不會顯示。下一次 🎰 抽籤、🎲 隨機或自動排座時生效。</p>
     ${status}
     ${seatHtml}
     <div class="sec-block">

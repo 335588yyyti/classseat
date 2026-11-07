@@ -365,8 +365,6 @@ body.is-drawing .toolbar-card { opacity: .5; }
 @media print { .draw-stage { display: none !important; } }
 
 /* ---------- 老師暗中安排 ---------- */
-.secret-btn { opacity: .35; border-color: transparent; background: transparent; }
-.secret-btn:hover, .secret-btn.on { opacity: 1; }
 .secret-btn.on { background: #ede9fe; border-color: #a78bfa; }
 .secret-card { border: 2px solid #a78bfa; background: #faf7ff; }
 .secret-card .card-head { margin-bottom: 6px; }
