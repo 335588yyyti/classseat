@@ -1393,6 +1393,8 @@ function renderSecret() {
   const status = ui.secretStatus === undefined ? ''
     : ui.secretStatus ? `<p class="sec-status warn">⚠ 上次排座有 ${ui.secretStatus} 項安排無法同時做到</p>`
       : '<p class="sec-status ok">✓ 上次排座全部照安排</p>';
+  const fixedCount = Object.keys(sec.fixed).length;
+  const freeCount = Math.max(0, state.students.length - fixedCount);
   const o = state.drawOpts;
   const optRow = (key, opts) => `<div class="sec-opts">${opts.map(([v, label]) =>
     `<button class="${o[key] === v ? 'on' : ''}" data-draw-opt="${key}" data-val="${v}">${label}</button>`).join('')}</div>`;
@@ -1405,6 +1407,13 @@ function renderSecret() {
       <p class="hint">「依條件」會遵守不可相鄰、身高、視力等設定；「完全隨機」只遵守下面的安排。按「抽籤」後，學生選自己的座號、搖籤筒，就會抽到照這些設定安排好的座位。</p>
     </div>
     ${status}
+    <div class="sec-block">
+      <div class="sec-title">📋 整份座位內定</div>
+      <p class="hint">把畫面上「目前的座位」全部設成一定抽到，學生抽籤時就會抽出一模一樣的結果。想留幾個位子讓學生真的隨機抽，點那個座位，把「一定抽到」改成「不指定」就好。</p>
+      <div class="sec-pair"><button class="btn small" data-sec-fixall>照目前座位全部內定</button>
+        ${fixedCount ? `<button class="btn small" data-sec-unfixall>取消全部內定</button>` : ''}</div>
+      <div class="sec-fixsum">${fixedCount ? `目前內定 ${fixedCount} 個座位，${freeCount} 位同學會隨機抽` : '目前沒有內定的座位'}</div>
+    </div>
     ${seatHtml}
     <div class="sec-block">
       <div class="sec-title">不能坐隔壁</div>
@@ -1414,7 +1423,7 @@ function renderSecret() {
     </div>
     <div class="sec-block">
       <div class="sec-title">全部安排（${list.length + sec.apart.length}）${list.length + sec.apart.length ? '<button class="link-btn" data-sec-clear>全部清除</button>' : ''}</div>
-      ${list.length ? `<ul class="sec-list">${list.map((x) => `<li><button class="link-btn" data-sec-pick="${x.k}">${x.t}</button></li>`).join('')}</ul>` : ''}
+      ${list.length ? `<details ${list.length <= 8 ? 'open' : ''}><summary>展開清單</summary><ul class="sec-list">${list.map((x) => `<li><button class="link-btn" data-sec-pick="${x.k}">${x.t}</button></li>`).join('')}</ul></details>` : ''}
     </div>`;
 }
 
@@ -1463,6 +1472,23 @@ function bindSecret() {
       ui.selSeat = d.secPick;
       ui.selected = state.assign[d.secPick] || null;
       renderSeatsPanel();
+    } else if ('secFixall' in d) {
+      const n = Object.keys(state.assign).length;
+      if (Object.keys(sec().fixed).length && !confirm('用目前的座位取代所有內定？')) return;
+      sec().fixed = { ...state.assign };
+      // 和內定衝突的「不會抽到」一併移除
+      for (const [k, v] of Object.entries(sec().ban)) {
+        const keep = v.filter((x) => x !== sec().fixed[k]);
+        if (keep.length) sec().ban[k] = keep; else delete sec().ban[k];
+      }
+      ui.secretStatus = undefined;
+      done();
+      toast(`已把目前 ${n} 個座位全部內定`);
+    } else if ('secUnfixall' in d) {
+      if (!confirm('取消全部內定？（「不會抽到」和「不能坐隔壁」會保留）')) return;
+      sec().fixed = {};
+      ui.secretStatus = undefined;
+      done();
     } else if ('secClear' in d) {
       if (!confirm('清除全部的暗中安排？')) return;
       state.secret = { fixed: {}, ban: {}, apart: [] };

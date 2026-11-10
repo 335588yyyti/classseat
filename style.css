@@ -425,3 +425,5 @@ body.big-screen.is-drawing .big-bar { display: none; }
 }
 .cond.prev-info { background: transparent; border-style: dashed; }
 .check-item.info { background: var(--field); color: #374151; }
+.sec-fixsum { font-size: 12.5px; color: #4c1d95; }
+.secret-card details summary { cursor: pointer; font-size: 12.5px; color: #6b7280; }
