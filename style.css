@@ -435,3 +435,6 @@ body.big-screen.is-drawing .big-bar { display: none; }
 body.pick-mode #room .desk.draw-hidden, body.pick-mode #room .desk.empty { cursor: pointer; }
 body.pick-mode #room .desk.draw-hidden:hover, body.pick-mode #room .desk.empty:hover { box-shadow: 0 0 0 3px #f59e0b; }
 body.pick-mode .qian { opacity: .35; }
+.tf-row { display: flex; flex-wrap: wrap; gap: 8px; }
+#tfText { width: 100%; font-size: 12px; word-break: break-all; }
+#transferDialog h3.sub { margin: 6px 0 0; }

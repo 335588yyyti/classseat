@@ -17,8 +17,7 @@
       <button class="tab" data-tab="seats" role="tab">② 座位安排</button>
     </nav>
     <div class="top-actions">
-      <button class="btn ghost" id="btnExport" title="下載資料備份 (JSON)">匯出</button>
-      <label class="btn ghost" title="從 JSON 備份還原">匯入<input type="file" id="fileImport" accept=".json,application/json" hidden></label>
+      <button class="btn ghost" id="btnTransfer" title="備份資料，或搬到手機／其他電腦">💾 備份／搬移</button>
       <button class="btn ghost danger-text" id="btnReset">全部重設</button>
     </div>
   </header>
@@ -206,6 +205,27 @@
     <button class="btn draw-btn" id="bigDraw">🎰 抽籤</button>
     <button class="btn small" id="bigExit">離開大屏</button>
   </div>
+
+  <dialog id="transferDialog">
+    <div class="dlg">
+      <h2>💾 備份／搬到其他裝置</h2>
+      <p class="hint">資料只存在「這台裝置的這個瀏覽器」。要在手機、家裡電腦、學校電腦都用，先在舊的裝置匯出，再到新的裝置匯入。<strong>資料裡包含老師的安排，請只傳給自己。</strong></p>
+      <h3 class="sub">① 從這台匯出</h3>
+      <div class="tf-row">
+        <button class="btn primary" id="tfCopy">📋 複製資料碼</button>
+        <button class="btn" id="tfDownload">⬇ 下載備份檔</button>
+      </div>
+      <p class="hint" id="tfInfo"></p>
+      <h3 class="sub">② 匯入到這台</h3>
+      <textarea id="tfText" rows="4" placeholder="把資料碼貼在這裡"></textarea>
+      <div class="tf-row">
+        <button class="btn primary" id="tfPaste">匯入資料碼</button>
+        <label class="btn">📂 選擇備份檔<input type="file" id="fileImport" accept=".json,application/json,text/plain" hidden></label>
+      </div>
+      <p class="hint">匯入會取代這台裝置目前的資料。</p>
+      <div class="dlg-actions"><button class="btn" id="tfClose">關閉</button></div>
+    </div>
+  </dialog>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
