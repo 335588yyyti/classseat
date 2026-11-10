@@ -67,6 +67,8 @@ function defaultState() {
       myopia: { on: true, weight: 3 },
       height: { on: true, weight: 2 },
       gender: { on: true, weight: 1 },
+      prevSeat: { on: true, weight: 3 },
+      prevSide: { on: true, weight: 2 },
     },
     layout: { type: 'map', mapId: 'class', cols: 6, paired: true, groups: 6 },
     maps: [{ id: 'class', name: '本班', seats: CLASS_LAYOUT.map((p) => ({ ...p })) }],
@@ -338,6 +340,8 @@ function geometry(seats = state.seats) {
   const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
   const half = (Math.max(...xs) - Math.min(...xs)) / 2;
   const side = seats.map((s) => (half ? Math.abs(s.x - cx) / half : 0));
+  // 左側 L／右側 R／中間 C（學生面向講台時的左右）
+  const sideCat = seats.map((s) => (!half || Math.abs(s.x - cx) <= half * 0.15 ? 'C' : s.x < cx ? 'L' : 'R'));
   const adj = new Uint8Array(N * N);
   const adjPairs = [];
   const rowPairs = [];
@@ -357,7 +361,7 @@ function geometry(seats = state.seats) {
   const groupIdx = seats.map((s) => (s.group ? groupKeys.indexOf(s.group) : -1));
   const sameGroup = (a, b) =>
     (groupIdx[a] >= 0 && groupIdx[a] === groupIdx[b]) || (!isGroups && adj[a * N + b] === 1);
-  return { N, front, side, adj, adjPairs, rowPairs, isGroups, groupIdx, groupCount: groupKeys.length, sameGroup };
+  return { N, front, side, sideCat, adj, adjPairs, rowPairs, isGroups, groupIdx, groupCount: groupKeys.length, sameGroup };
 }
 
 /* =========================================================
@@ -373,6 +377,12 @@ function buildModel() {
   const wM = c.myopia.on ? WEIGHT_MUL[c.myopia.weight] : 0;
   const wH = c.height.on ? WEIGHT_MUL[c.height.weight] : 0;
   const wG = c.gender.on ? WEIGHT_MUL[c.gender.weight] : 0;
+  // 上次的座位：不坐同一個位子、左右換邊
+  const prevMap = state.prev?.seats || {};
+  const wPS = c.prevSeat?.on ? WEIGHT_MUL[c.prevSeat.weight] : 0;
+  const wPD = c.prevSide?.on ? WEIGHT_MUL[c.prevSide.weight] : 0;
+  const prevSeatIdx = studs.map((s) => prevSeatIndex(prevMap[s.id], seats));
+  const prevSide = studs.map((s) => prevMap[s.id]?.side || '');
 
   // 身高百分位（矮→0，高→1）
   const withH = studs.map((s, i) => ({ i, h: parseFloat(s.height) })).filter((o) => o.h > 0).sort((a, b) => a.h - b.h);
@@ -436,6 +446,8 @@ function buildModel() {
       if (p > 0) t += p * 10 * f;
       else if (p < 0) t += -p * 10 * (1 - f);
       if (wH && hTarget[i] >= 0) t += wH * 10 * Math.abs(f - hTarget[i]);
+      if (wPS && prevSeatIdx[i] === pos[i]) t += wPS * 40;
+      if (wPD && (prevSide[i] === 'L' || prevSide[i] === 'R') && geo.sideCat[pos[i]] === prevSide[i]) t += wPD * 10;
     }
     for (const [a, b] of avoidAdj) if (adj[pos[a] * N + pos[b]]) t += 1000;
     for (const [a, b] of avoidGroup) if (sameGroup(pos[a], pos[b])) t += 800;
@@ -620,6 +632,12 @@ function evaluate() {
   pairCheck('avoidGroup', (a, b) => geo.sameGroup(a, b), 'err', geo.isGroups ? '在同一組（設定為不可同組）' : '坐在一起（設定為不可同組）');
   pairCheck('preferGroup', (a, b) => !geo.sameGroup(a, b), 'warn', geo.isGroups ? '沒有同組（設定為盡量同組）' : '沒有坐在一起（設定為盡量同組）');
 
+  // 剛記住、座位還沒換過時，不逐一提醒
+  const prevSeats = state.prev?.seats || {};
+  const prevSame = Object.keys(prevSeats).length > 0
+    && state.students.every((st) => !prevSeats[st.id] || prevSeatIndex(prevSeats[st.id], seats) === seatIdxOf[st.id]);
+  if (prevSame) items.push({ level: 'info', text: '📌 目前就是記住的「上次座位」；換座位後會提醒誰還坐在同一個位子或同一側' });
+  const prevSameSeat = [], prevStillL = [], prevStillR = [];
   for (const s of state.students) {
     const i = seatIdxOf[s.id];
     if (i === undefined) continue;
@@ -629,6 +647,14 @@ function evaluate() {
     if (s.hpref === 'outer' && sd < 0.5) { items.push({ level: 'warn', text: `${name(s)} 希望坐外側，目前偏中間` }); warnSeats.add(seats[i].id); }
     if (s.hpref === 'center' && sd > 0.5) { items.push({ level: 'warn', text: `${name(s)} 希望坐中間，目前偏外側` }); warnSeats.add(seats[i].id); }
     if (s.pref === 'back' && f < 0.5) { items.push({ level: 'warn', text: `${name(s)} 希望坐後排，目前在前半部` }); warnSeats.add(seats[i].id); }
+    const pv = prevSame ? null : state.prev?.seats?.[s.id];
+    if (pv) {
+      if (state.conditions.prevSeat?.on && prevSeatIndex(pv, seats) === i) { prevSameSeat.push(name(s)); warnSeats.add(seats[i].id); }
+      if (state.conditions.prevSide?.on && (pv.side === 'L' || pv.side === 'R') && geo.sideCat[i] === pv.side) {
+        (pv.side === 'L' ? prevStillL : prevStillR).push(name(s));
+        warnSeats.add(seats[i].id);
+      }
+    }
     if (state.conditions.myopia.on && s.myopia && f > 0.5) { items.push({ level: 'warn', text: `${name(s)} 近視，目前坐在後半部` }); warnSeats.add(seats[i].id); }
     for (const tid of s.tags) {
       const t = tagById(tid);
@@ -637,6 +663,10 @@ function evaluate() {
       if (t.strategy === 'back' && f < 0.5) { items.push({ level: 'warn', text: `${name(s)}（${t.name}）目前坐在前半部` }); warnSeats.add(seats[i].id); }
     }
   }
+  const list = (a) => (a.length > 8 ? `${a.slice(0, 8).join('、')}…等 ${a.length} 人` : a.join('、'));
+  if (prevSameSeat.length) items.push({ level: 'warn', text: `跟上次坐同一個位子：${list(prevSameSeat)}` });
+  if (prevStillL.length) items.push({ level: 'warn', text: `上次在左側、這次還在左側（建議換到右側）：${list(prevStillL)}` });
+  if (prevStillR.length) items.push({ level: 'warn', text: `上次在右側、這次還在右側（建議換到左側）：${list(prevStillR)}` });
   for (const t of state.tags) {
     if (t.strategy !== 'spread') continue;
     const members = state.students.filter((s) => s.tags.includes(t.id) && seatIdxOf[s.id] !== undefined);
@@ -657,7 +687,8 @@ function evaluate() {
       errSeats.add(v.seat); if (v.seat2) errSeats.add(v.seat2);
     }
   }
-  items.sort((a, b) => (a.level === 'err' ? 0 : 1) - (b.level === 'err' ? 0 : 1));
+  const rank = { err: 0, warn: 1, info: 2 };
+  items.sort((a, b) => rank[a.level] - rank[b.level]);
   return { items, errSeats, warnSeats };
 }
 
@@ -694,6 +725,8 @@ function renderConditions() {
     ['myopia', '👓 視力', '近視坐前排', '近視的同學優先安排在前排'],
     ['height', '📏 身高', '矮前高後', '矮的同學坐前面、高的坐後面（填公分或選 矮／中矮／中／中高／高）'],
     ['gender', '⚥ 性別', '男生旁邊放女生', '男生的左右兩旁盡量安排女生；女生旁邊不限制'],
+    ['prevSeat', '🔁 換位子', '不坐上次的位子', '不要跟「上次座位」坐同一個位子（在座位安排按「📌 記住這次座位」記錄）'],
+    ['prevSide', '↔ 左右換邊', '上次左側→換右側', '上次坐左側的換到右側、右側的換到左側；中間的不限（需先「📌 記住這次座位」）'],
   ];
   $('#builtinConds').innerHTML = defs.map(([k, title, short, desc]) => `
     <div class="cond ${c[k].on ? '' : 'off'}" title="${desc}">
@@ -706,7 +739,8 @@ function renderConditions() {
     </div>`).join('') + `
     <div class="cond fixed" title="不可相鄰、不可同組最優先；其次是盡量同組與座位偏好（在學生的「規則」中設定）">
       <span class="cond-text"><span class="cond-title">🤝 個人規則</span><span class="cond-desc">一律優先</span></span>
-    </div>`;
+    </div>
+    <div class="cond fixed prev-info"><span class="cond-text"><span class="cond-desc">${prevInfoText()}</span></span></div>`;
 
   const box = $('#customConds');
   if (!state.tags.length) {
@@ -1099,6 +1133,7 @@ function renderSeatsPanel() {
   $('#btnFlip').textContent = state.flipped ? '視角：講台在下（老師）' : '視角：講台在上（學生）';
   $('#btnUndo').disabled = !ui.history.length;
   $('#btnUnlockAll').disabled = !state.locked.length;
+  $('#btnRemember').title = prevInfoText().replace('📌 ', '');
   renderLayoutOpts();
   renderRoom();
   renderLegend();
@@ -1563,6 +1598,37 @@ function canEditDesks() {
   return state.mode === 'move' || isTemplate();
 }
 
+/* ---------- 上次的座位 ---------- */
+const SIDE_LABEL = { L: '左側', R: '右側', C: '中間' };
+
+/** 找出「上次座位」在目前座位中的位置：同一張桌子，或位置幾乎一樣的桌子 */
+function prevSeatIndex(pv, seats) {
+  if (!pv) return -1;
+  const k = seats.findIndex((x) => x.id === pv.seatId);
+  if (k >= 0) return k;
+  return seats.findIndex((x) => Math.abs(x.x - pv.x) < DESK_W / 2 && Math.abs(x.y - pv.y) < DESK_H / 2);
+}
+
+function prevInfoText() {
+  if (!state.prev?.at) return '📌 尚未記住上次座位';
+  const d = new Date(state.prev.at);
+  return `📌 上次座位：${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')} 記錄`;
+}
+
+function rememberSeating() {
+  if (state.prev?.at && !confirm(`用目前的座位取代「上次座位」（${prevInfoText().replace('📌 上次座位：', '')}）？`)) return;
+  const g = geometry();
+  const seats = {};
+  state.seats.forEach((s, i) => {
+    const st = state.assign[s.id];
+    if (st) seats[st] = { seatId: s.id, x: s.x, y: s.y, side: g.sideCat[i] };
+  });
+  state.prev = { at: Date.now(), seats };
+  save();
+  renderSeatsPanel();
+  toast('已記住這次座位，下次換座位時會避開同一個位子、並提醒左右換邊');
+}
+
 /* ---------- 組別 ---------- */
 /** 依位置自動分組：桌子邊緣相距很近（含斜角）就算同一組；單獨一張桌子不分組 */
 function autoGroup() {
@@ -1677,8 +1743,9 @@ function renderChecks(ev) {
     return;
   }
   const errs = ev.items.filter((i) => i.level === 'err').length;
-  const head = `<div class="hint">${errs ? `${errs} 項必須修正` : '沒有違反必要規則'}，${ev.items.length - errs} 項建議調整</div>`;
-  box.innerHTML = head + ev.items.map((i) => `<div class="check-item ${i.level}">${i.level === 'err' ? '✗ ' : '△ '}${esc(i.text)}</div>`).join('');
+  const warns = ev.items.filter((i) => i.level === 'warn').length;
+  const head = errs || warns ? `<div class="hint">${errs ? `${errs} 項必須修正` : '沒有違反必要規則'}，${warns} 項建議調整</div>` : '';
+  box.innerHTML = head + ev.items.map((i) => `<div class="check-item ${i.level}">${i.level === 'err' ? '✗ ' : i.level === 'warn' ? '△ ' : ''}${esc(i.text)}</div>`).join('');
 }
 
 function renderSelInfo() {
@@ -1698,6 +1765,7 @@ function renderSelInfo() {
   const tags = s.tags.map((t) => tagById(t)?.name).filter(Boolean).map(esc).join('、') || '—';
   box.innerHTML = `<dl>
     <dt>學生</dt><dd><strong>${esc(s.no)}. ${esc(s.name)}</strong> ${s.gender === 'M' ? '（男）' : s.gender === 'F' ? '（女）' : ''}</dd>
+    ${state.prev?.seats?.[s.id] ? `<dt>上次座位</dt><dd>${SIDE_LABEL[state.prev.seats[s.id].side]}</dd>` : ''}
     <dt>近視／身高</dt><dd>${s.myopia ? '近視' : '—'}／${s.height ? esc(s.height) + ' cm' : s.hlevel ? HLEVEL_LABEL[s.hlevel] : '—'}</dd>
     <dt>座位偏好</dt><dd>前後：${PREF_LABEL[s.pref]}；左右：${HPREF_LABEL[s.hpref || 'any']}</dd>
     <dt>不可相鄰</dt><dd>${names(s.avoidAdj)}</dd>
@@ -1758,6 +1826,7 @@ function bindSeatsPanel() {
   $('#btnDraw').addEventListener('click', startDraw);
   $('#bigDraw').addEventListener('click', startDraw);
   $('#btnBig').addEventListener('click', () => setBigScreen(true));
+  $('#btnRemember').addEventListener('click', rememberSeating);
   $('#bigExit').addEventListener('click', () => setBigScreen(false));
   $('#drawPad').addEventListener('click', (e) => {
     const b = e.target.closest('[data-draw-no]');

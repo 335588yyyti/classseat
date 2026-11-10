@@ -423,3 +423,5 @@ body.big-screen.is-drawing .big-bar { display: none; }
   body.is-drawing .panel { padding-right: 16px; padding-bottom: 64vh; }
   .qian { transform: scale(.7); transform-origin: 50% 0; height: 210px; margin-bottom: -10px; }
 }
+.cond.prev-info { background: transparent; border-style: dashed; }
+.check-item.info { background: var(--field); color: #374151; }
