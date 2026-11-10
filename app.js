@@ -73,7 +73,7 @@ function defaultState() {
     layout: { type: 'map', mapId: 'class', cols: 6, paired: true, groups: 6 },
     maps: [{ id: 'class', name: '本班', seats: CLASS_LAYOUT.map((p) => ({ ...p })) }],
     // 老師暗中安排：fixed 座位→一定抽到的學生；ban 座位→一定不會抽到的學生；apart 不能坐隔壁的兩人
-    secret: { fixed: {}, ban: {}, apart: [] },
+    secret: { fixed: {}, ban: {}, apart: [], backup: {} },
     // 抽籤設定（在「說明」面板裡調整）
     drawOpts: { mode: 'cond', order: 'front', speed: 'mid', sound: 'on' },
     seats: [],
@@ -120,7 +120,7 @@ function normalize(data) {
   if (s.layout.type === 'map' && !s.maps.some((m) => m.id === s.layout.mapId)) {
     if (s.maps.length) s.layout.mapId = s.maps[0].id; else s.layout.type = 'rows';
   }
-  s.secret = { fixed: {}, ban: {}, apart: [], ...(data.secret || {}) };
+  s.secret = { fixed: {}, ban: {}, apart: [], backup: {}, ...(data.secret || {}) };
   s.drawOpts = { ...d.drawOpts, ...(data.drawOpts || {}) };
   delete s.customLayout;
   delete s.freeLayout;
@@ -276,6 +276,7 @@ function relayout() {
   const remap = (obj) => Object.fromEntries(Object.entries(obj).filter(([k]) => move[k]).map(([k, v]) => [move[k], v]));
   state.secret.fixed = remap(state.secret.fixed);
   state.secret.ban = remap(state.secret.ban);
+  for (const [k, v] of Object.entries(state.secret.backup || {})) state.secret.backup[k] = v.map((x) => move[x]).filter(Boolean);
   state.custom = false;
 }
 
@@ -290,6 +291,11 @@ function cleanupSecret() {
     if (!seatIds.has(k) || !keep.length) delete sec.ban[k]; else sec.ban[k] = keep;
   }
   sec.apart = sec.apart.filter(([a, b]) => sids.has(a) && sids.has(b) && a !== b);
+  sec.backup ||= {};
+  for (const [k, v] of Object.entries(sec.backup)) {
+    const keep = v.filter((x) => seatIds.has(x));
+    if (!sids.has(k) || !keep.length) delete sec.backup[k]; else sec.backup[k] = keep;
+  }
 }
 
 function seatOrder(seats) {
@@ -499,7 +505,7 @@ function buildModel() {
   return { geo, idx, cost, secretCost, hasSecret: banList.length + apart.length > 0 };
 }
 
-function optimize(useConditions = true, extraFixed = null) {
+function optimize(useConditions = true, extraFixed = null, fixedOverride = null) {
   const seats = state.seats;
   const studs = state.students;
   const N = seats.length;
@@ -516,7 +522,7 @@ function optimize(useConditions = true, extraFixed = null) {
     if (si === undefined || st === undefined || taken.has(st)) continue;
     baseOcc[si] = st; fixedSeats.add(si); taken.add(st);
   }
-  for (const [sid, stid] of Object.entries(state.secret.fixed)) {
+  for (const [sid, stid] of Object.entries(fixedOverride || state.secret.fixed)) {
     if (fixedSeats.has(seatIndex.get(sid))) continue;
     const si = seatIndex.get(sid), st = model.idx.get(stid);
     if (si === undefined || st === undefined || taken.has(st)) continue;
@@ -1395,6 +1401,9 @@ function renderSecret() {
     seatHtml = `<div class="sec-seat">
       <div class="sec-title">座位 #${seatNo(seat.id)}${groupNum(seat.group) ? `（第 ${groupNum(seat.group)} 組）` : ''}<span class="hint">目前：${now ? nm(now) : '空位'}</span></div>
       <label class="sec-row"><span>一定抽到</span><select data-sec-fixed><option value="">不指定</option>${studOpts(new Set(), true)}</select></label>
+      ${fx ? `<div class="sec-row"><span>備案位置：這個位子被別人自選走時，${nm(fx)} 依序改坐</span><div class="sec-chips">${(sec.backup?.[fx] || []).map((k) => `<span class="sec-chip">#${seatNo(k)}<button data-sec-unbackup="${k}" aria-label="移除">×</button></span>`).join('')}
+        <select data-sec-backup><option value="">＋ 加入座位…</option>${seatOrder(state.seats).filter((x) => x.id !== seat.id && !(sec.backup?.[fx] || []).includes(x.id)).map((x) => `<option value="${x.id}">#${seatNo(x.id)}${state.assign[x.id] ? `（目前：${nm(state.assign[x.id])}）` : '（空位）'}</option>`).join('')}</select></div>
+        <span class="hint">沒有備案（或備案也被選走）時，依抽籤設定重新安排。</span></div>` : ''}
       <div class="sec-row"><span>一定不會抽到</span><div class="sec-chips">${bans.map((id) => `<span class="sec-chip">${nm(id)}<button data-sec-unban="${id}" aria-label="移除">×</button></span>`).join('')}
         <select data-sec-ban><option value="">＋ 加入…</option>${studOpts(new Set([...bans, fx]))}</select></div></div>
     </div>`;
@@ -1405,6 +1414,7 @@ function renderSecret() {
   const list = [
     ...Object.entries(sec.fixed).map(([k, v]) => ({ k, t: `#${seatNo(k)} 一定是 ${nm(v)}` })),
     ...Object.entries(sec.ban).map(([k, v]) => ({ k, t: `#${seatNo(k)} 不會是 ${v.map(nm).join('、')}` })),
+    ...Object.entries(sec.backup || {}).map(([who, v]) => ({ k: Object.keys(sec.fixed).find((kk) => sec.fixed[kk] === who) || v[0], t: `${nm(who)} 的備案：${v.map((k) => '#' + seatNo(k)).join(' → ')}` })),
   ].sort((x, y) => seatNo(x.k) - seatNo(y.k));
   const status = ui.secretStatus === undefined ? ''
     : ui.secretStatus ? `<p class="sec-status warn">⚠ 上次排座有 ${ui.secretStatus} 項安排無法同時做到</p>`
@@ -1460,6 +1470,12 @@ function bindSecret() {
         if (sec().ban[seatId]) sec().ban[seatId] = sec().ban[seatId].filter((x) => x !== v);
       } else delete sec().fixed[seatId];
       done();
+    } else if ('secBackup' in e.target.dataset && seatId && v) {
+      const who = sec().fixed[seatId];
+      if (!who) return;
+      sec().backup ||= {};
+      sec().backup[who] = [...new Set([...(sec().backup[who] || []), v])];
+      done();
     } else if ('secBan' in e.target.dataset && seatId && v) {
       sec().ban[seatId] = [...new Set([...(sec().ban[seatId] || []), v])];
       if (sec().fixed[seatId] === v) delete sec().fixed[seatId];
@@ -1470,6 +1486,15 @@ function bindSecret() {
     const btn = e.target.closest('button');
     if (!btn) return;
     const d = btn.dataset;
+    if (d.secUnbackup) {
+      const who = sec().fixed[ui.selSeat];
+      if (who && sec().backup?.[who]) {
+        sec().backup[who] = sec().backup[who].filter((x) => x !== d.secUnbackup);
+        if (!sec().backup[who].length) delete sec().backup[who];
+      }
+      done();
+      return;
+    }
     if (d.secUnban) {
       const list = (sec().ban[ui.selSeat] || []).filter((x) => x !== d.secUnban);
       if (list.length) sec().ban[ui.selSeat] = list; else delete sec().ban[ui.selSeat];
@@ -1508,7 +1533,7 @@ function bindSecret() {
       done();
     } else if ('secClear' in d) {
       if (!confirm('清除全部的暗中安排？')) return;
-      state.secret = { fixed: {}, ban: {}, apart: [] };
+      state.secret = { fixed: {}, ban: {}, apart: [], backup: {} };
       ui.secretStatus = undefined;
       done();
     }
@@ -1525,10 +1550,11 @@ function startDraw() {
   ui.selSeat = null; ui.selected = null;
   pushHistory();
   // 結果先依老師的設定排好、藏起來，學生抽到時才揭曉
-  optimize(state.drawOpts.mode !== 'random');
+  const sessionFixed = { ...state.secret.fixed };
+  optimize(state.drawOpts.mode !== 'random', null, sessionFixed);
   save();
   const locked = new Set(state.locked);
-  ui.drawing = { done: new Set(state.students.filter((x) => locked.has(x.id)).map((x) => x.id)), current: null, last: null, busy: false, mode: 'draw' };
+  ui.drawing = { done: new Set(state.students.filter((x) => locked.has(x.id)).map((x) => x.id)), current: null, last: null, busy: false, mode: 'draw', fixed: sessionFixed };
   document.body.classList.add('is-drawing');
   $('#drawBanner').hidden = false;
   $('#drawStick').classList.remove('rise');
@@ -1550,32 +1576,10 @@ function setDrawMode(mode) {
   renderDrawPad();
 }
 
-/** 這個同學可不可以坐這個位子（不說原因，免得洩漏老師的安排） */
-function canPick(sid, seatId) {
-  const sec = state.secret;
-  if (sec.fixed[seatId] && sec.fixed[seatId] !== sid) return false;
-  if (Object.entries(sec.fixed).some(([k, v]) => v === sid && k !== seatId)) return false;
-  if ((sec.ban[seatId] || []).includes(sid)) return false;
-  const geo = geometry();
-  const idxOf = Object.fromEntries(state.seats.map((x, i) => [x.id, i]));
-  const me = idxOf[seatId];
-  // 已經確定位置的同學：已揭曉的，或老師內定的
-  const placed = {};
-  for (const [k, v] of Object.entries(state.assign)) if (ui.drawing.done.has(v)) placed[v] = idxOf[k];
-  for (const [k, v] of Object.entries(sec.fixed)) placed[v] = idxOf[k];
-  const nearBad = (other) => placed[other] !== undefined && geo.adj[me * geo.N + placed[other]] === 1;
-  for (const [a, b] of sec.apart) {
-    if (a === sid && nearBad(b)) return false;
-    if (b === sid && nearBad(a)) return false;
-  }
-  if (state.drawOpts.mode !== 'random') {
-    const st = studentById(sid);
-    if (st.avoidAdj.some(nearBad)) return false;
-    if (st.avoidGroup.some((o) => placed[o] !== undefined && geo.sameGroup(me, placed[o]))) return false;
-  }
-  return true;
-}
-
+/**
+ * 學生自由選位：選了就坐（只有已經有人揭曉的位子不能選）。
+ * 老師的內定只在這次抽籤中跟著調整：被選走位子的同學改坐「備案位置」，沒有備案就依條件重新排。
+ */
 function pickSeat(seatId) {
   const d = ui.drawing;
   if (!d || d.mode !== 'pick' || d.busy) return;
@@ -1583,11 +1587,30 @@ function pickSeat(seatId) {
   const occ = state.assign[seatId];
   if (occ && d.done.has(occ)) { toast('這個位子已經有人了'); return; }
   const sid = d.current;
-  if (!canPick(sid, seatId)) { toast('這個位子不能選，請換一個位子', 2600); return; }
-  // 已揭曉的同學和這次自選的位子固定，其他人重新照老師的設定排
+  const fx = d.fixed;
+  const takenByDone = (k) => { const o = state.assign[k]; return o && d.done.has(o); };
+  // 自己原本被內定在別的位子：那個位子空出來
+  for (const k of Object.keys(fx)) if (fx[k] === sid && k !== seatId) delete fx[k];
+  const displaced = [];
+  if (fx[seatId] && fx[seatId] !== sid) displaced.push(fx[seatId]);
+  delete fx[seatId];
+  // 「不能坐隔壁」的對象如果被內定在旁邊、還沒揭曉，也一起改到備案位置
+  const geo = geometry();
+  const idxOf = Object.fromEntries(state.seats.map((x, i) => [x.id, i]));
+  for (const [x, y] of state.secret.apart) {
+    const other = x === sid ? y : y === sid ? x : null;
+    if (!other || d.done.has(other)) continue;
+    const k = Object.keys(fx).find((kk) => fx[kk] === other);
+    if (k && geo.adj[idxOf[k] * geo.N + idxOf[seatId]]) { delete fx[k]; displaced.push(other); }
+  }
+  for (const who of displaced) {
+    const backup = (state.secret.backup?.[who] || []).find((k) => k !== seatId && !fx[k] && !takenByDone(k));
+    if (backup) fx[backup] = who;
+  }
+  // 已揭曉的同學和這次自選的位子固定，其他人照（調整後的）老師設定重新排
   const extra = { [seatId]: sid };
   for (const [k, v] of Object.entries(state.assign)) if (d.done.has(v) && v !== sid && k !== seatId) extra[k] = v;
-  optimize(state.drawOpts.mode !== 'random', extra);
+  optimize(state.drawOpts.mode !== 'random', extra, fx);
   save();
   const st = studentById(sid);
   d.done.add(sid);
