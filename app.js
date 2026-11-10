@@ -122,6 +122,7 @@ function normalize(data) {
   }
   s.secret = { fixed: {}, ban: {}, apart: [], backup: {}, ...(data.secret || {}) };
   s.drawOpts = { ...d.drawOpts, ...(data.drawOpts || {}) };
+  s.plans = Array.isArray(data.plans) ? data.plans : [];
   delete s.customLayout;
   delete s.freeLayout;
   s.assign = data.assign && typeof data.assign === 'object' ? data.assign : {};
@@ -1763,6 +1764,9 @@ function prevSeatIndex(pv, seats) {
 }
 
 /** 記住的座位：最新在前，最多 3 次 */
+const MAX_RECORDS = 10;
+/** 全部記住過的座位（最新在前，最多 10 次） */
+const allRecords = () => [state.prev, ...(state.prevHistory || [])].filter((r) => r && r.seats).slice(0, MAX_RECORDS);
 const prevRecords = () => [state.prev, ...(state.prevHistory || [])].filter((r) => r && r.seats).slice(0, 3);
 const prevN = () => clamp(Number(state.conditions.prevSeat?.n) || 1, 1, 3);
 const fmtTime = (t) => { const d = new Date(t); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
@@ -1783,12 +1787,12 @@ function rememberSeating() {
   const same = state.prev?.seats && Object.keys(seats).length === Object.keys(state.prev.seats).length
     && Object.entries(seats).every(([k, v]) => state.prev.seats[k]?.seatId === v.seatId);
   // 舊的往後推，最多保留 3 次；同一份座位重複按只更新時間
-  if (!same && state.prev?.seats) state.prevHistory = [state.prev, ...(state.prevHistory || [])].slice(0, 2);
+  if (!same && state.prev?.seats) state.prevHistory = [state.prev, ...(state.prevHistory || [])].slice(0, MAX_RECORDS - 1);
   state.prev = { at: Date.now(), seats };
   save();
   exportData();
   renderSeatsPanel();
-  toast('已記住這次座位，並把備份檔下載到「下載」資料夾', 3500);
+  toast('已記住這次座位（可在「📚 紀錄／方案」查看），備份檔也下載到「下載」資料夾了', 4000);
 }
 
 /** 下載資料備份（JSON） */
@@ -1827,9 +1831,11 @@ async function readDataCode(text) {
 }
 
 /* ---------- 下載座位表圖片 ---------- */
-function downloadSeatImage() {
-  const pad = 30, titleH = 56, S = 2;
-  const b = roomBounds();
+/** 把一份座位畫成圖片（seats：[{id,x,y,group}]、assign：座位→學生） */
+function drawSeatCanvas(seats, assign, { title = `${state.className || ''} 座位表`.trim(), sub = fmtTime(Date.now()), scale = 2 } = {}) {
+  const pad = 30, titleH = 56, S = scale;
+  const xs = seats.map((x) => x.x), ys = seats.map((x) => x.y);
+  const b = { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
   const W = b.maxX - b.minX + DESK_W + pad * 2;
   const RH = b.maxY - b.minY + DESK_H + pad * 2 + PODIUM_SPACE;
   const H = RH + titleH;
@@ -1842,17 +1848,15 @@ function downloadSeatImage() {
   ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
   ctx.fillStyle = '#1f2328'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.font = `700 22px ${font}`;
-  ctx.fillText(`${state.className || ''} 座位表`.trim(), W / 2, 26);
+  ctx.fillText(title, W / 2, 26);
   ctx.font = `12px ${font}`; ctx.fillStyle = '#6b7280';
-  ctx.fillText(fmtTime(Date.now()), W / 2, 46);
+  ctx.fillText(sub, W / 2, 46);
   ctx.translate(0, titleH);
-  // 講台
   const pw = Math.min(260, W - 40), py = state.flipped ? RH - pad - 40 : pad - 10;
   ctx.fillStyle = '#3d4a45'; rr((W - pw) / 2, py, pw, 40, 6); ctx.fill();
   ctx.fillStyle = '#e9efe9'; ctx.font = `14px ${font}`; ctx.fillText('講　台', W / 2, py + 20);
-  // 組別標籤
   const groups = {};
-  state.seats.forEach((st) => {
+  seats.forEach((st) => {
     if (!groupNum(st.group)) return;
     const v = toView(st.x, st.y, b, pad);
     const g = groups[st.group] || (groups[st.group] = { x: Infinity, y: Infinity, maxY: -Infinity });
@@ -1860,10 +1864,9 @@ function downloadSeatImage() {
   });
   ctx.textAlign = 'left'; ctx.fillStyle = '#6b7280'; ctx.font = `600 12px ${font}`;
   for (const [k, g] of Object.entries(groups)) ctx.fillText(`第 ${groupNum(k)} 組`, g.x, state.flipped ? g.maxY + DESK_H + 10 : g.y - 9);
-  // 桌子
-  for (const seat of state.seats) {
+  for (const seat of seats) {
     const v = toView(seat.x, seat.y, b, pad);
-    const st = studentById(state.assign[seat.id]);
+    const st = studentById(assign[seat.id]);
     ctx.fillStyle = st ? '#fffdf7' : '#f5f5f5'; ctx.strokeStyle = '#d6cfbf'; ctx.lineWidth = 1.5;
     rr(v.x, v.y, DESK_W, DESK_H, 7); ctx.fill(); ctx.stroke();
     if (!st) { ctx.fillStyle = '#9ca3af'; ctx.textAlign = 'center'; ctx.font = `13px ${font}`; ctx.fillText('空位', v.x + DESK_W / 2, v.y + DESK_H / 2); continue; }
@@ -1876,13 +1879,166 @@ function downloadSeatImage() {
     ctx.fillStyle = '#1f2328'; ctx.textAlign = 'center';
     ctx.fillText(st.name, v.x + DESK_W / 2 + 2, v.y + DESK_H / 2 + 5);
   }
+  return cv;
+}
+
+function downloadCanvas(cv, filename) {
   cv.toBlob((blob) => {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `${state.className || '班級'}-座位表.png`;
+    a.download = filename;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }, 'image/png');
+}
+
+function downloadSeatImage() {
+  downloadCanvas(drawSeatCanvas(state.seats, state.assign), `${state.className || '班級'}-座位表.png`);
+}
+
+/* ---------- 📚 紀錄／方案 ---------- */
+/** 記住的座位 → 可以畫圖的座位清單 */
+function recordToSeats(rec) {
+  const seats = [], assign = {};
+  Object.entries(rec.seats).forEach(([sid, v], i) => {
+    const cur = state.seats.find((x) => x.id === v.seatId);
+    const id = 'r' + i;
+    seats.push({ id, x: v.x, y: v.y, group: cur?.group || null });
+    assign[id] = sid;
+  });
+  return { seats, assign };
+}
+
+const planSummary = (p) => {
+  const sec = p.secret;
+  if (!sec) return '只有座位';
+  const bits = [];
+  const f = Object.keys(sec.fixed || {}).length, bn = Object.keys(sec.ban || {}).length, ap = (sec.apart || []).length;
+  if (f) bits.push(`內定 ${f}`);
+  if (bn) bits.push(`不會抽到 ${bn}`);
+  if (ap) bits.push(`不能坐隔壁 ${ap}`);
+  return bits.length ? `含老師的安排：${bits.join('、')}` : '含老師的安排（目前沒有設定）';
+};
+
+function renderRecords() {
+  const tab = ui.recTab || 'hist';
+  $$('#recTabs [data-rtab]').forEach((b) => b.classList.toggle('active', b.dataset.rtab === tab));
+  const thumb = (seats, assign, title, sub) => drawSeatCanvas(seats, assign, { title, sub, scale: 1 }).toDataURL('image/png');
+  let html = '';
+  if (tab === 'hist') {
+    const recs = allRecords();
+    html = `<p class="hint">每按一次「📌 記住這次座位」就會存一筆在這裡（存在這台裝置的瀏覽器，最多 ${MAX_RECORDS} 次；用「💾 備份／搬移」可以帶到其他裝置）。排座條件「🔁 換位子」會參考最近 ${prevN()} 次。</p>`
+      + (recs.length ? recs.map((r, i) => {
+        const { seats, assign } = recordToSeats(r);
+        const label = i === 0 ? '最近一次' : `前 ${i + 1} 次`;
+        return `<div class="rec-item">
+          <img class="rec-thumb" src="${thumb(seats, assign, `${label}的座位`, fmtTime(r.at))}" alt="" data-rec-zoom="${i}">
+          <div class="rec-info"><b>${label}</b><span class="hint">${fmtTime(r.at)}・${Object.keys(r.seats).length} 人</span>
+            <div class="rec-actions"><button class="btn small" data-rec-zoom="${i}">放大看</button><button class="btn small" data-rec-apply="${i}">套用到座位表</button><button class="link-btn" data-rec-del="${i}">刪除</button></div></div>
+        </div>`;
+      }).join('') : '<p class="empty-note">還沒有紀錄。座位排好或抽完籤後，按工具列的「📌 記住這次座位」。</p>');
+  } else {
+    const plans = state.plans || [];
+    html = `<p class="hint">把目前的座位存成方案，之後一鍵載入（例如「段考版」「分組討論版」）。勾選「連同老師的安排」會一起存下內定、不會抽到、不能坐隔壁的設定。</p>
+      <div class="rec-save"><input type="text" id="planName" placeholder="方案名稱，例如：段考版" value="方案 ${plans.length + 1}">
+        <label><input type="checkbox" id="planWithSecret" checked> 連同老師的安排</label>
+        <button class="btn primary small" data-plan-save>＋ 存成新方案</button></div>`
+      + (plans.length ? plans.map((p, i) => `<div class="rec-item">
+          <img class="rec-thumb" src="${thumb(p.seats, p.assign, p.name, fmtTime(p.at))}" alt="" data-plan-zoom="${i}">
+          <div class="rec-info"><b>${esc(p.name)}</b><span class="hint">${fmtTime(p.at)}・${planSummary(p)}</span>
+            <div class="rec-actions"><button class="btn small" data-plan-zoom="${i}">放大看</button><button class="btn small" data-plan-load="${i}">載入</button><button class="btn small" data-plan-update="${i}">用目前覆蓋</button><button class="link-btn" data-plan-del="${i}">刪除</button></div></div>
+        </div>`).join('') : '<p class="empty-note">還沒有方案。</p>');
+  }
+  $('#recBody').innerHTML = html;
+}
+
+function zoomImage(src) {
+  $('#recZoomImg').src = src;
+  $('#recZoom').hidden = false;
+}
+
+function currentPlanData(withSecret) {
+  return {
+    at: Date.now(),
+    layout: JSON.parse(JSON.stringify(state.layout)),
+    seats: templateFrom(state.seats).map((x, i) => ({ ...x, id: state.seats[i].id })),
+    assign: { ...state.assign },
+    secret: withSecret ? JSON.parse(JSON.stringify(state.secret)) : null,
+  };
+}
+
+function bindRecords() {
+  $('#btnRecords').addEventListener('click', () => { ui.recTab ||= 'hist'; $('#recZoom').hidden = true; renderRecords(); $('#recDialog').showModal(); });
+  $('#recClose').addEventListener('click', () => $('#recDialog').close());
+  $('#recTabs').addEventListener('click', (e) => { const b = e.target.closest('[data-rtab]'); if (b) { ui.recTab = b.dataset.rtab; renderRecords(); } });
+  $('#recZoom').addEventListener('click', () => { $('#recZoom').hidden = true; });
+  $('#recBody').addEventListener('click', (e) => {
+    const el = e.target.closest('[data-rec-zoom],[data-rec-apply],[data-rec-del],[data-plan-save],[data-plan-zoom],[data-plan-load],[data-plan-update],[data-plan-del]');
+    if (!el) return;
+    const d = el.dataset;
+    const recs = allRecords();
+    if (d.recZoom !== undefined) {
+      const r = recs[+d.recZoom];
+      const { seats, assign } = recordToSeats(r);
+      zoomImage(drawSeatCanvas(seats, assign, { title: `${+d.recZoom === 0 ? '最近一次' : `前 ${+d.recZoom + 1} 次`}的座位`, sub: fmtTime(r.at) }).toDataURL('image/png'));
+    } else if (d.recApply !== undefined) {
+      const r = recs[+d.recApply];
+      if (!confirm(`把 ${fmtTime(r.at)} 的座位套用到目前的座位表？（可按「復原」）`)) return;
+      pushHistory();
+      const assign = {};
+      for (const [sid, v] of Object.entries(r.seats)) {
+        if (!studentById(sid)) continue;
+        const k = prevSeatIndex(v, state.seats);
+        if (k >= 0 && !assign[state.seats[k].id]) assign[state.seats[k].id] = sid;
+      }
+      state.assign = assign;
+      ensureSeating();
+      save(); renderSeatsPanel();
+      $('#recDialog').close();
+      toast('已套用');
+    } else if (d.recDel !== undefined) {
+      if (!confirm('刪除這筆座位紀錄？')) return;
+      const all = allRecords();
+      all.splice(+d.recDel, 1);
+      state.prev = all[0] || null;
+      state.prevHistory = all.slice(1);
+      save(); renderRecords(); renderConditions();
+    } else if ('planSave' in d) {
+      const name = $('#planName').value.trim() || `方案 ${(state.plans || []).length + 1}`;
+      state.plans = [...(state.plans || []), { id: uid(), name, ...currentPlanData($('#planWithSecret').checked) }];
+      save(); renderRecords();
+      toast(`已存成方案「${name}」`);
+    } else if (d.planZoom !== undefined) {
+      const p = state.plans[+d.planZoom];
+      zoomImage(drawSeatCanvas(p.seats, p.assign, { title: p.name, sub: fmtTime(p.at) }).toDataURL('image/png'));
+    } else if (d.planLoad !== undefined) {
+      const p = state.plans[+d.planLoad];
+      if (!confirm(`載入方案「${p.name}」？目前的座位${p.secret ? '和老師的安排' : ''}會被取代（可按「復原」）。`)) return;
+      pushHistory();
+      state.layout = JSON.parse(JSON.stringify(p.layout));
+      if (state.layout.type === 'map' && !state.maps.some((m) => m.id === state.layout.mapId)) state.layout.type = 'groups';
+      state.seats = p.seats.map((x) => ({ ...x }));
+      state.custom = true;
+      state.assign = Object.fromEntries(Object.entries(p.assign).filter(([, v]) => studentById(v)));
+      if (p.secret) state.secret = JSON.parse(JSON.stringify(p.secret));
+      ensureSeating();
+      cleanupSecret();
+      save(); renderSeatsPanel();
+      $('#recDialog').close();
+      toast(`已載入「${p.name}」`);
+    } else if (d.planUpdate !== undefined) {
+      const p = state.plans[+d.planUpdate];
+      if (!confirm(`用目前的座位${p.secret ? '和老師的安排' : ''}覆蓋方案「${p.name}」？`)) return;
+      Object.assign(p, currentPlanData(!!p.secret));
+      save(); renderRecords();
+      toast('已更新方案');
+    } else if (d.planDel !== undefined) {
+      const p = state.plans[+d.planDel];
+      if (!confirm(`刪除方案「${p.name}」？`)) return;
+      state.plans.splice(+d.planDel, 1);
+      save(); renderRecords();
+    }
+  });
 }
 
 /* ---------- 抽籤音效（不需要音檔，用瀏覽器合成） ---------- */
@@ -2428,5 +2584,6 @@ setTimeout(() => {
 bindStudentsPanel();
 bindSeatsPanel();
 bindSecret();
+bindRecords();
 ensureSeating();
 showTab(state.tab === 'seats' ? 'seats' : 'students');

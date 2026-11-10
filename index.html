@@ -99,6 +99,7 @@
         <span class="spacer"></span>
         <button class="btn small" id="btnFlip"></button>
         <button class="btn small" id="btnRemember">📌 記住這次座位</button>
+        <button class="btn small" id="btnRecords">📚 紀錄／方案</button>
         <button class="btn small" id="btnUnlockAll">解除全部鎖定</button>
         <button class="btn small secret-btn" id="btnSecret">說明</button>
         <button class="btn small" id="btnBig" title="投影給學生看：只顯示座位表">📺 大屏</button>
@@ -224,6 +225,15 @@
       </div>
       <p class="hint">匯入會取代這台裝置目前的資料。</p>
       <div class="dlg-actions"><button class="btn" id="tfClose">關閉</button></div>
+    </div>
+  </dialog>
+
+  <dialog id="recDialog" class="rec-dlg">
+    <div class="dlg">
+      <div class="rd-head"><h2>📚 座位紀錄與方案</h2><button class="btn" id="recClose">關閉</button></div>
+      <div class="seg small" id="recTabs"><button data-rtab="hist">過去的座位</button><button data-rtab="plans">我的方案</button></div>
+      <div id="recBody" class="rec-body"></div>
+      <div class="rec-zoom" id="recZoom" hidden title="點一下關閉"><img id="recZoomImg" alt="座位表預覽"></div>
     </div>
   </dialog>
 
