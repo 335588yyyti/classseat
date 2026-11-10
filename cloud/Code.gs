@@ -6,6 +6,7 @@
  * 資料是網頁壓縮後的文字；密碼在網頁端先雜湊，這裡再加鹽雜湊一次後才存。
  * 登入成功會發一組「登入憑證」給那台裝置，之後用憑證存取，不必再傳密碼；
  * 密碼錯太多次只會擋「新的登入」，已經登入的裝置不受影響。
+ * 老師可以另外產生有期限的「抽籤專用連結」：只能讀取和存檔，不能改密碼或再產生連結。
  *
  * 設定方式請看同一個資料夾的 README.md。
  */
@@ -20,7 +21,7 @@ const COL = { code: 1, name: 2, hash: 3, salt: 4, updated: 5, fails: 6, lock: 7,
 const WIDTH = COL.data - 1 + MAX_CHUNKS;
 
 function doGet() {
-  return out_({ ok: true, app: 'classseat', version: 2 });
+  return out_({ ok: true, app: 'classseat', version: 3 });
 }
 
 function doPost(e) {
@@ -51,11 +52,13 @@ function doPost(e) {
     const r = sh.getRange(row, 1, 1, WIDTH).getValues()[0];
     const tokens = parseTokens_(r[COL.tokens - 1]);
 
-    // 已登入的裝置：用登入憑證
+    // 已登入的裝置：用登入憑證（老師）或抽籤連結（只能讀取、存檔）
     if (req.token) {
       const th = hash_(String(req.token), 'token');
-      if (tokens.indexOf(th) < 0) return out_({ ok: false, error: 'session' });
-      return act_(sh, row, r, req, now, tokens, th);
+      if (tokens.indexOf(th) >= 0) return act_(sh, row, r, req, now, tokens, th, 'teacher');
+      const d = tokens.filter(function (x) { return isDraw_(x) && x.split(':')[2] === th && Number(x.split(':')[1]) > now; });
+      if (d.length) return act_(sh, row, r, req, now, tokens, th, 'draw');
+      return out_({ ok: false, error: 'session' });
     }
 
     // 新的登入：用密碼
@@ -72,8 +75,9 @@ function doPost(e) {
     if (req.action !== 'login') return out_({ ok: false, error: 'action' });
     const token = newToken_();
     const th = hash_(token, 'token');
-    tokens.push(th);
-    sh.getRange(row, COL.tokens).setValue(JSON.stringify(tokens.slice(-MAX_TOKENS)));
+    const teacher = tokens.filter(function (x) { return !isDraw_(x); }).concat([th]).slice(-MAX_TOKENS);
+    const draws = tokens.filter(function (x) { return isDraw_(x) && Number(x.split(':')[1]) > now; });
+    sh.getRange(row, COL.tokens).setValue(JSON.stringify(teacher.concat(draws)));
     return out_({ ok: true, token: token, name: r[COL.name - 1], updatedAt: Number(r[COL.updated - 1]), data: readData_(r) });
   } catch (err) {
     return out_({ ok: false, error: 'server', message: String(err) });
@@ -82,10 +86,10 @@ function doPost(e) {
   }
 }
 
-/** 已登入裝置可以做的事 */
-function act_(sh, row, r, req, now, tokens, th) {
+/** 已登入裝置可以做的事（role：teacher 老師／draw 抽籤連結） */
+function act_(sh, row, r, req, now, tokens, th, role) {
   if (req.action === 'load') {
-    return out_({ ok: true, name: r[COL.name - 1], updatedAt: Number(r[COL.updated - 1]), data: readData_(r) });
+    return out_({ ok: true, role: role, name: r[COL.name - 1], updatedAt: Number(r[COL.updated - 1]), data: readData_(r) });
   }
   if (req.action === 'save') {
     const cur = Number(r[COL.updated - 1]);
@@ -97,6 +101,21 @@ function act_(sh, row, r, req, now, tokens, th) {
     sh.getRange(row, COL.updated).setValue(t);
     sh.getRange(row, COL.data, 1, MAX_CHUNKS).setValues([chunks]);
     return out_({ ok: true, updatedAt: t });
+  }
+  if (role !== 'teacher') return out_({ ok: false, error: 'action' });
+  if (req.action === 'drawlink') {
+    // 產生抽籤專用連結（1～168 小時有效）
+    const hours = Math.min(168, Math.max(1, Number(req.hours) || 24));
+    const token = newToken_();
+    const exp = now + hours * 3600 * 1000;
+    const keep = tokens.filter(function (x) { return !isDraw_(x) || Number(x.split(':')[1]) > now; });
+    keep.push('d:' + exp + ':' + hash_(token, 'token'));
+    sh.getRange(row, COL.tokens).setValue(JSON.stringify(keep));
+    return out_({ ok: true, drawToken: token, expiresAt: exp });
+  }
+  if (req.action === 'drawrevoke') {
+    sh.getRange(row, COL.tokens).setValue(JSON.stringify(tokens.filter(function (x) { return !isDraw_(x); })));
+    return out_({ ok: true });
   }
   if (req.action === 'passwd') {
     // 改密碼要再輸入一次目前的密碼
@@ -147,6 +166,10 @@ function split_(data) {
 
 function readData_(r) {
   return r.slice(COL.data - 1).map(function (c) { return String(c || '').replace(/^~/, ''); }).join('');
+}
+
+function isDraw_(x) {
+  return typeof x === 'string' && x.indexOf('d:') === 0;
 }
 
 function parseTokens_(v) {

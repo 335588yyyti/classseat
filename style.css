@@ -475,3 +475,14 @@ body.big-screen .cloud-btn, body.is-drawing .cloud-btn { display: none; }
 .cloud-msg { min-height: 18px; margin: 4px 0 0; font-size: 13.5px; color: var(--ok); }
 .cloud-msg.bad { color: var(--danger); }
 .cl-box.warn { background: var(--warn-soft); color: #713f12; }
+
+/* ---------- 抽籤專用模式（學校大屏） ---------- */
+body.kiosk .topbar .tabs, body.kiosk .topbar .top-actions, body.kiosk .cloud-btn, body.kiosk #bigExit,
+body.kiosk #panel-students, body.kiosk .toolbar-card, body.kiosk .side, body.kiosk .room-hint { display: none !important; }
+body.kiosk .class-name { pointer-events: none; border-color: transparent !important; background: transparent !important; }
+body.kiosk .class-name::placeholder { color: transparent; }
+.kiosk-cover { position: fixed; inset: 0; z-index: 300; background: #2b1d16; color: #fff; display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; }
+.kiosk-cover[hidden] { display: none; }
+.kiosk-box { max-width: 520px; }
+.kiosk-icon { font-size: 64px; }
+.kiosk-cover p { font-size: 20px; line-height: 1.6; }

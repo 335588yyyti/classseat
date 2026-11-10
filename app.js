@@ -90,7 +90,7 @@ function defaultState() {
 
 function load() {
   try {
-    const raw = localStorage.getItem(storeKey());
+    const raw = store().getItem(storeKey());
     if (!raw) return null;
     return normalize(JSON.parse(raw));
   } catch {
@@ -140,14 +140,30 @@ function getSession() {
   try { return JSON.parse(localStorage.getItem(SESSION_KEY) || sessionStorage.getItem(SESSION_KEY) || 'null'); } catch { return null; }
 }
 function setSession(sess) {
+  if (sess?.kiosk) { try { sessionStorage.setItem(KIOSK_KEY, JSON.stringify(sess)); } catch { /* ignore */ } return; }
   try {
     localStorage.removeItem(SESSION_KEY);
     sessionStorage.removeItem(SESSION_KEY);
     if (sess) (sess.remember ? localStorage : sessionStorage).setItem(SESSION_KEY, JSON.stringify(sess));
   } catch { /* 無痕模式等情況 */ }
 }
-const cloud = { session: getSession(), status: 'idle', busy: false, pending: false, timer: null };
-const storeKey = () => (cloud.session ? classKey(cloud.session.code) : STORE_KEY);
+/* 抽籤專用連結：#draw=班級代碼&t=憑證(&u=雲端網址)。打開後馬上把網址列上的憑證拿掉，只存在這個分頁 */
+const KIOSK_KEY = 'classseat-kiosk';
+function readKiosk() {
+  const m = location.hash.match(/^#draw=([^&]+)&t=([^&]+)(?:&u=([^&]+))?/);
+  if (m) {
+    const k = { kiosk: true, code: decodeURIComponent(m[1]), token: m[2], url: m[3] ? decodeURIComponent(m[3]) : '', updatedAt: 0, syncedHash: '' };
+    try { sessionStorage.setItem(KIOSK_KEY, JSON.stringify(k)); } catch { /* ignore */ }
+    history.replaceState(null, '', location.pathname + location.search);
+    return k;
+  }
+  try { return JSON.parse(sessionStorage.getItem(KIOSK_KEY) || 'null'); } catch { return null; }
+}
+const KIOSK = readKiosk();
+const cloud = { session: KIOSK || getSession(), status: 'idle', busy: false, pending: false, timer: null };
+const storeKey = () => (cloud.session ? (cloud.session.kiosk ? 'classseat-kiosk-data:' : 'classseat-class:') + cloud.session.code : STORE_KEY);
+// 抽籤專用模式的資料只放在這個分頁（關掉就沒了），不會留在學校的電腦上
+const store = () => (cloud.session?.kiosk ? sessionStorage : localStorage);
 /** 字串的簡單雜湊，用來判斷資料有沒有變（不是加密用） */
 function hashStr(str) {
   let h = 2166136261;
@@ -161,7 +177,7 @@ function save() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     const json = JSON.stringify(state);
-    try { localStorage.setItem(storeKey(), json); } catch { /* 無痕模式等情況 */ }
+    try { store().setItem(storeKey(), json); } catch { /* 無痕模式等情況 */ }
     // 登入雲端班級時，資料有變就排程上傳
     if (cloud.session && hashStr(json) !== cloud.session.syncedHash) scheduleCloudSave();
   }, 200);
@@ -1349,11 +1365,27 @@ function renderRoom() {
   }
 
   const seatNoMap = Object.fromEntries(seatOrder(state.seats).map((x, i) => [x.id, i + 1]));
+  const preDraw = document.body.classList.contains('big-screen') && !ui.drawing && !ui.revealed;
+  let preAssign = null;
+  if (preDraw && state.prev?.seats) {
+    preAssign = {};
+    for (const [sid, pv] of Object.entries(state.prev.seats)) {
+      const k = prevSeatIndex(pv, state.seats);
+      if (k >= 0 && studentById(sid) && !preAssign[state.seats[k].id]) preAssign[state.seats[k].id] = sid;
+    }
+  }
   for (const seat of state.seats) {
     const v = toView(seat.x, seat.y, b, pad);
     const st = studentById(state.assign[seat.id]);
     const cls = ['desk'];
     const clean = isClean();
+    if (preDraw) {
+      // 大屏還沒抽籤：顯示上次記住的座位，沒有紀錄就全部顯示「？」，不會先看到新的結果
+      const ps = studentById(preAssign?.[seat.id]);
+      if (!preAssign) html += st ? `<div class="desk draw-hidden" data-seat="${seat.id}" style="left:${v.x}px;top:${v.y}px"><span class="d-name">？</span></div>` : `<div class="desk empty" data-seat="${seat.id}" style="left:${v.x}px;top:${v.y}px"><span class="d-empty">空位</span></div>`;
+      else html += `<div class="desk ${ps ? (ps.gender ? 'g-' + ps.gender : '') : 'empty'}" data-seat="${seat.id}" style="left:${v.x}px;top:${v.y}px">${ps ? `<span class="d-no">${esc(ps.no)}</span><span class="d-name">${esc(ps.name)}</span>` : '<span class="d-empty">空位</span>'}</div>`;
+      continue;
+    }
     if (ui.drawing && st && !ui.drawing.done.has(st.id)) {
       // 還沒抽到：先藏起來
       html += `<div class="desk draw-hidden" data-seat="${seat.id}" style="left:${v.x}px;top:${v.y}px"><span class="d-name">？</span></div>`;
@@ -1734,6 +1766,7 @@ function endDraw() {
   const left = state.students.filter((x) => !ui.drawing.done.has(x.id)).length;
   if (left && !confirm(`還有 ${left} 人沒抽，結束後會直接顯示全部座位。確定結束？`)) return;
   ui.drawing = null;
+  ui.revealed = true;
   // 記下這份內定已經用過（下次老師重排時會提醒清空）
   if (Object.keys(state.secret.fixed).length) { state.secret.usedAt = Date.now(); save(); }
   $('#drawBanner').hidden = true;
@@ -1744,6 +1777,7 @@ function endDraw() {
 
 /* ---------- 大屏模式（投影給學生看） ---------- */
 function setBigScreen(on) {
+  ui.revealed = false; // 進大屏時先不顯示新的座位，抽完籤才揭曉
   document.body.classList.toggle('big-screen', on);
   $('#bigBar').hidden = !on;
   if (on) {
@@ -1818,9 +1852,9 @@ function rememberSeating() {
   if (!same && state.prev?.seats) state.prevHistory = [state.prev, ...(state.prevHistory || [])].slice(0, MAX_RECORDS - 1);
   state.prev = { at: Date.now(), seats };
   save();
-  exportData();
+  if (!cloud.session?.kiosk) exportData();
   renderSeatsPanel();
-  toast('已記住這次座位（可在「📚 紀錄／方案」查看），備份檔也下載到「下載」資料夾了', 4000);
+  toast(cloud.session?.kiosk ? '已記住這次座位' : '已記住這次座位（可在「📚 紀錄／方案」查看），備份檔也下載到「下載」資料夾了', 4000);
 }
 
 /** 下載資料備份（JSON） */
@@ -1838,11 +1872,12 @@ function exportData() {
 }
 
 /* ---------- 雲端同步 ---------- */
-const cloudUrl = () => (localStorage.getItem(CLOUD_URL_KEY) || DEFAULT_CLOUD_URL || '').trim();
+const cloudUrl = () => (cloud.session?.kiosk && cloud.session.url) || (localStorage.getItem(CLOUD_URL_KEY) || DEFAULT_CLOUD_URL || '').trim();
 const CLOUD_ERR = {
   code: '班級代碼要 2～20 個字，不能有空白', key: '密碼格式不正確', exists: '這個班級代碼已經有人用了，請換一個',
   notfound: '找不到這個班級代碼', wrongpass: '老師密碼不對', locked: '密碼錯太多次，新的登入要等 10 分鐘後再試',
   session: '這台裝置的登入已失效（可能在別台改了密碼），請重新登入',
+  kiosk: '這個抽籤連結已經失效或過期了，請老師重新產生一個',
   toolarge: '資料太大，無法存到雲端', server: '雲端程式發生錯誤', action: '雲端程式版本不對，請重新部署 Code.gs',
 };
 const cloudErrText = (r) => (CLOUD_ERR[r.error] || '連線失敗') + (r.error === 'wrongpass' && r.left !== undefined ? `（再錯 ${r.left} 次會鎖 10 分鐘）` : '');
@@ -1924,7 +1959,7 @@ function applyCloudState(newState, updatedAt) {
   ensureSeating();
   showTab(state.tab === 'seats' ? 'seats' : 'students');
   const json = JSON.stringify(state);
-  try { localStorage.setItem(storeKey(), json); } catch { /* ignore */ }
+  try { store().setItem(storeKey(), json); } catch { /* ignore */ }
   cloud.session.updatedAt = updatedAt;
   cloud.session.syncedHash = hashStr(json);
   setSession(cloud.session);
@@ -1956,6 +1991,7 @@ async function cloudPull({ quiet = false } = {}) {
 
 /** 登入失效（別台改了密碼或登出）：保留這台的資料，請老師重新登入 */
 function sessionExpired() {
+  if (cloud.session?.kiosk) { kioskMessage(CLOUD_ERR.kiosk); return; }
   const code = cloud.session?.code;
   cloud.session.expired = true;
   setSession(cloud.session);
@@ -2005,6 +2041,11 @@ function renderCloudDialog() {
       </div>
       <p class="hint">修改會自動存到雲端。在其他電腦或手機打開網頁、用同一組班級代碼和老師密碼登入，就是同一份資料。</p>
       <div class="tf-row"><button class="btn primary" data-cl="sync">立即同步</button><button class="btn" data-cl="pull">從雲端重新載入</button></div>
+      <h3 class="sub">📺 抽籤專用連結</h3>
+      <p class="hint">產生一個連結，用 LINE 傳給自己。到學校在大屏的電腦點開，直接就是抽籤畫面，不會出現後台；抽籤結果會自動存回雲端，學校電腦不會留下資料。</p>
+      <div class="tf-row"><select id="clDrawHours" aria-label="有效期限"><option value="12">12 小時內有效</option><option value="24" selected>1 天內有效</option><option value="72">3 天內有效</option><option value="168">7 天內有效</option></select>
+        <button class="btn primary" data-cl="drawlink">產生抽籤連結</button><button class="btn small" data-cl="drawrevoke">停用所有抽籤連結</button></div>
+      <div class="tf-row" id="clDrawOut" hidden><input type="text" id="clDrawLink" readonly><button class="btn small" data-cl="drawcopy">複製</button></div>
       <h3 class="sub">更改老師密碼</h3>
       <div class="cl-form"><input type="password" id="clOldPass" placeholder="目前的密碼" autocomplete="current-password">
         <div class="tf-row"><input type="password" id="clNewPass" placeholder="新密碼（至少 4 個字）" autocomplete="new-password"><button class="btn" data-cl="passwd">更改</button></div></div>
@@ -2107,6 +2148,35 @@ async function cloudAction(act) {
       $('#cloudDialog').close();
       return;
     }
+    if (act === 'drawlink') {
+      const sess = cloud.session;
+      await cloudSave();
+      const r = await cloudCall('drawlink', { code: sess.code, token: sess.token, hours: Number($('#clDrawHours').value) || 24 }, sess.url);
+      if (!r.ok) { cloudMsg(r.error === 'action' ? '雲端程式版本太舊，請更新 Code.gs 後重新部署' : cloudErrText(r)); return; }
+      const base = location.origin + location.pathname;
+      const u = sess.url && sess.url !== DEFAULT_CLOUD_URL ? `&u=${encodeURIComponent(sess.url)}` : '';
+      const link = `${base}#draw=${encodeURIComponent(sess.code)}&t=${r.drawToken}${u}`;
+      $('#clDrawOut').hidden = false;
+      $('#clDrawLink').value = link;
+      let copied = false;
+      try { await navigator.clipboard.writeText(link); copied = true; } catch { /* ignore */ }
+      cloudMsg(`${copied ? '✓ 已複製抽籤連結' : '✓ 已產生抽籤連結（請按「複製」）'}，${fmtTime(r.expiresAt)} 前有效。連結等於抽籤用的鑰匙，請只傳給自己。`, false);
+      return;
+    }
+    if (act === 'drawcopy') {
+      const el = $('#clDrawLink');
+      let copied = false;
+      try { await navigator.clipboard.writeText(el.value); copied = true; } catch { el.select(); try { copied = document.execCommand('copy'); } catch { /* ignore */ } }
+      cloudMsg(copied ? '✓ 已複製' : '請長按文字框全選後拷貝', !copied);
+      return;
+    }
+    if (act === 'drawrevoke') {
+      if (!confirm('停用所有已產生的抽籤連結？')) return;
+      const sess = cloud.session;
+      const r = await cloudCall('drawrevoke', { code: sess.code, token: sess.token }, sess.url);
+      cloudMsg(r.ok ? '✓ 所有抽籤連結都已停用' : cloudErrText(r), !r.ok);
+      return;
+    }
     if (act === 'sync') { await cloudSave(true); renderCloudDialog(); return; }
     if (act === 'pull') { await cloudPull(); renderCloudDialog(); return; }
     if (act === 'passwd') {
@@ -2161,7 +2231,33 @@ function bindCloud() {
   // 切回這個分頁時，看看其他裝置有沒有新資料
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') cloudPull({ quiet: false }); });
   renderCloudButton();
-  if (cloud.session) cloudPull({ quiet: true });
+  if (cloud.session?.kiosk) startKiosk();
+  else if (cloud.session) cloudPull({ quiet: true });
+}
+
+/* ---------- 抽籤專用模式（給學校大屏） ---------- */
+function kioskMessage(text) {
+  const el = $('#kioskCover');
+  el.hidden = false;
+  $('#kioskText').textContent = text;
+}
+
+async function startKiosk() {
+  document.body.classList.add('kiosk');
+  kioskMessage('載入中…');
+  const sess = cloud.session;
+  try {
+    const r = await cloudCall('load', { code: sess.code, token: sess.token }, sess.url || cloudUrl());
+    if (!r.ok) { kioskMessage(r.error === 'session' ? CLOUD_ERR.kiosk : cloudErrText(r)); return; }
+    const data = normalize(await readDataCode(r.data));
+    if (!data) { kioskMessage('雲端資料格式不正確'); return; }
+    data.tab = 'seats';
+    applyCloudState(data, r.updatedAt);
+    $('#kioskCover').hidden = true;
+    setBigScreen(true);
+  } catch {
+    kioskMessage('連不上雲端，請確認網路後重新整理');
+  }
 }
 
 /* ---------- 資料碼（壓縮後的文字，方便用 LINE／Email 搬到其他裝置） ---------- */
@@ -2633,7 +2729,10 @@ function bindSeatsPanel() {
   $('#mapDialog').addEventListener('close', () => { if ($('#mapDialog').returnValue === 'ok') createMap(); });
   // 按「抽籤」直接進入籤筒畫面，設定在「說明」面板裡
   $('#btnDraw').addEventListener('click', startDraw);
-  $('#bigDraw').addEventListener('click', startDraw);
+  $('#bigDraw').addEventListener('click', () => {
+    if (document.body.classList.contains('kiosk') && !document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});
+    startDraw();
+  });
   $('#btnBig').addEventListener('click', () => setBigScreen(true));
   $('#btnRemember').addEventListener('click', rememberSeating);
   $('#bigExit').addEventListener('click', () => setBigScreen(false));
@@ -2933,7 +3032,7 @@ bindGlobal();
 // 太久沒備份時提醒（資料只存在這個瀏覽器裡）
 setTimeout(() => {
   const days = state.lastBackup ? (Date.now() - state.lastBackup) / 864e5 : Infinity;
-  const hasData = state.prev || state.students.some((x) => !/^學生\d+$/.test(x.name));
+  const hasData = !cloud.session && (state.prev || state.students.some((x) => !/^學生\d+$/.test(x.name)));
   if (hasData && days > 14) toast(state.lastBackup ? `已經 ${Math.floor(days)} 天沒有備份了，建議按右上角「💾 備份／搬移」存一份` : '提醒：資料只存在這個瀏覽器，建議按右上角「💾 備份／搬移」備份', 6000);
 }, 800);
 bindStudentsPanel();
