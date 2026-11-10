@@ -490,3 +490,17 @@ body.no-cloud .cloud-btn { display: none !important; }
 .batch-help { font-size: 13px; }
 .batch-help summary { cursor: pointer; color: var(--accent); }
 .batch-help ul { margin: 6px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; }
+
+/* ---------- 使用說明 ---------- */
+dialog.guide-dlg { width: min(720px, 96vw); }
+.guide-dlg .dlg { max-height: 88vh; padding: 0; gap: 0; }
+.guide-body { overflow: auto; padding: 8px 20px 20px; display: flex; flex-direction: column; gap: 8px; font-size: 14px; line-height: 1.7; }
+.guide-body details { border: 1px solid var(--line); border-radius: 10px; padding: 8px 14px; }
+.guide-body details[open] { background: #fbfbfc; }
+.guide-body summary { cursor: pointer; font-weight: 700; font-size: 15px; }
+.guide-body ul, .guide-body ol { margin: 6px 0; padding-left: 20px; }
+.guide-body pre { background: var(--field); padding: 8px 10px; border-radius: 8px; font-size: 13px; overflow-x: auto; margin: 6px 0; }
+.guide-body p { margin: 6px 0; }
+.secret-card .card-head { flex-wrap: nowrap; gap: 6px; align-items: center; }
+.secret-card .card-head h2, .secret-card #btnGuide, .secret-card #secretClose { white-space: nowrap; }
+.secret-card #btnGuide { padding: 3px 8px; }
