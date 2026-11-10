@@ -423,3 +423,15 @@ body.big-screen.is-drawing .big-bar { display: none; }
   body.is-drawing .panel { padding-right: 16px; padding-bottom: 64vh; }
   .qian { transform: scale(.7); transform-origin: 50% 0; height: 210px; margin-bottom: -10px; }
 }
+.cond.prev-info { background: transparent; border-style: dashed; }
+.check-item.info { background: var(--field); color: #374151; }
+.sec-fixsum { font-size: 12.5px; color: #4c1d95; }
+.secret-card details summary { cursor: pointer; font-size: 12.5px; color: #6b7280; }
+.draw-stage .draw-remember { background: #e8b84a; border-color: #e8b84a; color: #2b1d16; font-weight: 700; }
+.prev-info .link-btn { font-size: 12px; margin-left: 6px; }
+.draw-modes { display: flex; gap: 4px; background: #3d2a20; padding: 3px; border-radius: 10px; }
+.draw-modes button { border: 0; background: transparent; color: #d6c3b5; padding: 5px 14px; border-radius: 8px; cursor: pointer; font-size: 14px; }
+.draw-modes button.on { background: #f6d36b; color: #7f1d1d; font-weight: 700; }
+body.pick-mode #room .desk.draw-hidden, body.pick-mode #room .desk.empty { cursor: pointer; }
+body.pick-mode #room .desk.draw-hidden:hover, body.pick-mode #room .desk.empty:hover { box-shadow: 0 0 0 3px #f59e0b; }
+body.pick-mode .qian { opacity: .35; }
