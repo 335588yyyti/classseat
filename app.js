@@ -67,7 +67,7 @@ function defaultState() {
       myopia: { on: true, weight: 3 },
       height: { on: true, weight: 2 },
       gender: { on: true, weight: 1 },
-      prevSeat: { on: true, weight: 3 },
+      prevSeat: { on: true, weight: 3, n: 1 },
       prevSide: { on: true, weight: 2 },
     },
     layout: { type: 'map', mapId: 'class', cols: 6, paired: true, groups: 6 },
@@ -75,7 +75,7 @@ function defaultState() {
     // 老師暗中安排：fixed 座位→一定抽到的學生；ban 座位→一定不會抽到的學生；apart 不能坐隔壁的兩人
     secret: { fixed: {}, ban: {}, apart: [] },
     // 抽籤設定（在「說明」面板裡調整）
-    drawOpts: { mode: 'cond', order: 'front', speed: 'mid' },
+    drawOpts: { mode: 'cond', order: 'front', speed: 'mid', sound: 'on' },
     seats: [],
     assign: {}, // seatId -> studentId
     locked: [], // studentIds
@@ -140,12 +140,12 @@ function save() {
 
 const ui = { selected: null, selSeat: null, newGroup: 'auto', scale: 1, history: [] };
 
-function toast(msg) {
+function toast(msg, ms = 2200) {
   const t = $('#toast');
   t.textContent = msg;
   t.classList.add('show');
   clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => t.classList.remove('show'), 2200);
+  toast.timer = setTimeout(() => t.classList.remove('show'), ms);
 }
 
 function pushHistory() {
@@ -381,7 +381,8 @@ function buildModel() {
   const prevMap = state.prev?.seats || {};
   const wPS = c.prevSeat?.on ? WEIGHT_MUL[c.prevSeat.weight] : 0;
   const wPD = c.prevSide?.on ? WEIGHT_MUL[c.prevSide.weight] : 0;
-  const prevSeatIdx = studs.map((s) => prevSeatIndex(prevMap[s.id], seats));
+  const recs = prevRecords().slice(0, prevN());
+  const prevSeatSets = studs.map((s) => new Set(recs.map((r) => prevSeatIndex(r.seats?.[s.id], seats)).filter((k) => k >= 0)));
   const prevSide = studs.map((s) => prevMap[s.id]?.side || '');
 
   // 身高百分位（矮→0，高→1）
@@ -446,7 +447,7 @@ function buildModel() {
       if (p > 0) t += p * 10 * f;
       else if (p < 0) t += -p * 10 * (1 - f);
       if (wH && hTarget[i] >= 0) t += wH * 10 * Math.abs(f - hTarget[i]);
-      if (wPS && prevSeatIdx[i] === pos[i]) t += wPS * 40;
+      if (wPS && prevSeatSets[i].has(pos[i])) t += wPS * 40;
       if (wPD && (prevSide[i] === 'L' || prevSide[i] === 'R') && geo.sideCat[pos[i]] === prevSide[i]) t += wPD * 10;
     }
     for (const [a, b] of avoidAdj) if (adj[pos[a] * N + pos[b]]) t += 1000;
@@ -498,7 +499,7 @@ function buildModel() {
   return { geo, idx, cost, secretCost, hasSecret: banList.length + apart.length > 0 };
 }
 
-function optimize(useConditions = true) {
+function optimize(useConditions = true, extraFixed = null) {
   const seats = state.seats;
   const studs = state.students;
   const N = seats.length;
@@ -509,8 +510,14 @@ function optimize(useConditions = true) {
   const baseOcc = new Int32Array(N).fill(-1);
   const fixedSeats = new Set();
   const taken = new Set();
-  // 老師內定的座位優先，其次才是鎖定的座位
+  // 抽籤中已揭曉／自選的座位最優先，其次是老師內定，再來才是鎖定的座位
+  for (const [sid, stid] of Object.entries(extraFixed || {})) {
+    const si = seatIndex.get(sid), st = model.idx.get(stid);
+    if (si === undefined || st === undefined || taken.has(st)) continue;
+    baseOcc[si] = st; fixedSeats.add(si); taken.add(st);
+  }
   for (const [sid, stid] of Object.entries(state.secret.fixed)) {
+    if (fixedSeats.has(seatIndex.get(sid))) continue;
     const si = seatIndex.get(sid), st = model.idx.get(stid);
     if (si === undefined || st === undefined || taken.has(st)) continue;
     baseOcc[si] = st; fixedSeats.add(si); taken.add(st);
@@ -649,7 +656,7 @@ function evaluate() {
     if (s.pref === 'back' && f < 0.5) { items.push({ level: 'warn', text: `${name(s)} 希望坐後排，目前在前半部` }); warnSeats.add(seats[i].id); }
     const pv = prevSame ? null : state.prev?.seats?.[s.id];
     if (pv) {
-      if (state.conditions.prevSeat?.on && prevSeatIndex(pv, seats) === i) { prevSameSeat.push(name(s)); warnSeats.add(seats[i].id); }
+      if (state.conditions.prevSeat?.on && prevRecords().slice(0, prevN()).some((r) => prevSeatIndex(r.seats?.[s.id], seats) === i)) { prevSameSeat.push(name(s)); warnSeats.add(seats[i].id); }
       if (state.conditions.prevSide?.on && (pv.side === 'L' || pv.side === 'R') && geo.sideCat[i] === pv.side) {
         (pv.side === 'L' ? prevStillL : prevStillR).push(name(s));
         warnSeats.add(seats[i].id);
@@ -664,7 +671,7 @@ function evaluate() {
     }
   }
   const list = (a) => (a.length > 8 ? `${a.slice(0, 8).join('、')}…等 ${a.length} 人` : a.join('、'));
-  if (prevSameSeat.length) items.push({ level: 'warn', text: `跟上次坐同一個位子：${list(prevSameSeat)}` });
+  if (prevSameSeat.length) items.push({ level: 'warn', text: `${prevN() > 1 ? `跟最近 ${prevN()} 次坐過的位子重複` : '跟上次坐同一個位子'}：${list(prevSameSeat)}` });
   if (prevStillL.length) items.push({ level: 'warn', text: `上次在左側、這次還在左側（建議換到右側）：${list(prevStillL)}` });
   if (prevStillR.length) items.push({ level: 'warn', text: `上次在右側、這次還在右側（建議換到左側）：${list(prevStillR)}` });
   for (const t of state.tags) {
@@ -725,7 +732,7 @@ function renderConditions() {
     ['myopia', '👓 視力', '近視坐前排', '近視的同學優先安排在前排'],
     ['height', '📏 身高', '矮前高後', '矮的同學坐前面、高的坐後面（填公分或選 矮／中矮／中／中高／高）'],
     ['gender', '⚥ 性別', '男生旁邊放女生', '男生的左右兩旁盡量安排女生；女生旁邊不限制'],
-    ['prevSeat', '🔁 換位子', '不坐上次的位子', '不要跟「上次座位」坐同一個位子（在座位安排按「📌 記住這次座位」記錄）'],
+    ['prevSeat', '🔁 換位子', '不坐坐過的位子', '不要坐最近幾次坐過的位子（在座位安排按「📌 記住這次座位」記錄，最多記 3 次）'],
     ['prevSide', '↔ 左右換邊', '上次左側→換右側', '上次坐左側的換到右側、右側的換到左側；中間的不限（需先「📌 記住這次座位」）'],
   ];
   $('#builtinConds').innerHTML = defs.map(([k, title, short, desc]) => `
@@ -735,12 +742,13 @@ function renderConditions() {
         <span class="cond-title">${title}</span>
         <span class="cond-desc">${short}</span>
       </label>
+      ${k === 'prevSeat' ? `<select class="w-sel" data-prev-n aria-label="參考幾次">${[1, 2, 3].map((n) => `<option value="${n}" ${prevN() === n ? 'selected' : ''}>最近 ${n} 次</option>`).join('')}</select>` : ''}
       ${weightSelect(c[k].weight, `data-cond-w="${k}"`)}
     </div>`).join('') + `
     <div class="cond fixed" title="不可相鄰、不可同組最優先；其次是盡量同組與座位偏好（在學生的「規則」中設定）">
       <span class="cond-text"><span class="cond-title">🤝 個人規則</span><span class="cond-desc">一律優先</span></span>
     </div>
-    <div class="cond fixed prev-info"><span class="cond-text"><span class="cond-desc">${prevInfoText()}</span></span></div>`;
+    <div class="cond fixed prev-info"><span class="cond-text"><span class="cond-desc">${prevInfoText()}</span>${state.prev ? '<button class="link-btn" data-clear-prev>清除紀錄</button>' : ''}</span></div>`;
 
   const box = $('#customConds');
   if (!state.tags.length) {
@@ -1006,6 +1014,14 @@ function bindStudentsPanel() {
     const k = e.target.dataset.cond, kw = e.target.dataset.condW;
     if (k) state.conditions[k].on = e.target.checked;
     if (kw) state.conditions[kw].weight = Number(e.target.value);
+    if ('prevN' in e.target.dataset) state.conditions.prevSeat.n = Number(e.target.value);
+    renderConditions(); save();
+  });
+  $('#builtinConds').addEventListener('click', (e) => {
+    if (!e.target.closest('[data-clear-prev]')) return;
+    if (!confirm('清除所有「記住的座位」紀錄？')) return;
+    state.prev = null;
+    state.prevHistory = [];
     renderConditions(); save();
   });
 
@@ -1404,6 +1420,7 @@ function renderSecret() {
       <div class="sec-title">🎰 抽籤設定</div>
       <div class="sec-row"><span>怎麼抽</span>${optRow('mode', [['cond', '依條件'], ['random', '完全隨機']])}</div>
       <div class="sec-row"><span>搖籤時間</span>${optRow('speed', [['fast', '短'], ['mid', '普通'], ['slow', '長']])}</div>
+      <div class="sec-row"><span>音效</span>${optRow('sound', [['on', '開'], ['off', '關']])}</div>
       <p class="hint">「依條件」會遵守不可相鄰、身高、視力等設定；「完全隨機」只遵守下面的安排。按「抽籤」後，學生選自己的座號、搖籤筒，就會抽到照這些設定安排好的座位。</p>
     </div>
     ${status}
@@ -1511,7 +1528,7 @@ function startDraw() {
   optimize(state.drawOpts.mode !== 'random');
   save();
   const locked = new Set(state.locked);
-  ui.drawing = { done: new Set(state.students.filter((x) => locked.has(x.id)).map((x) => x.id)), current: null, last: null, busy: false };
+  ui.drawing = { done: new Set(state.students.filter((x) => locked.has(x.id)).map((x) => x.id)), current: null, last: null, busy: false, mode: 'draw' };
   document.body.classList.add('is-drawing');
   $('#drawBanner').hidden = false;
   $('#drawStick').classList.remove('rise');
@@ -1522,6 +1539,66 @@ function startDraw() {
 
 function setDrawLabel(t) { $('#drawLabel').textContent = t; }
 
+/* ---------- 自選座位（抽籤前讓表現好的同學先挑） ---------- */
+function setDrawMode(mode) {
+  const d = ui.drawing;
+  if (!d || d.busy) return;
+  d.mode = mode;
+  d.current = null;
+  document.body.classList.toggle('pick-mode', mode === 'pick');
+  setDrawLabel(mode === 'pick' ? '自選座位：先選座號，再點想坐的位子' : '請選擇座號');
+  renderDrawPad();
+}
+
+/** 這個同學可不可以坐這個位子（不說原因，免得洩漏老師的安排） */
+function canPick(sid, seatId) {
+  const sec = state.secret;
+  if (sec.fixed[seatId] && sec.fixed[seatId] !== sid) return false;
+  if (Object.entries(sec.fixed).some(([k, v]) => v === sid && k !== seatId)) return false;
+  if ((sec.ban[seatId] || []).includes(sid)) return false;
+  const geo = geometry();
+  const idxOf = Object.fromEntries(state.seats.map((x, i) => [x.id, i]));
+  const me = idxOf[seatId];
+  // 已經確定位置的同學：已揭曉的，或老師內定的
+  const placed = {};
+  for (const [k, v] of Object.entries(state.assign)) if (ui.drawing.done.has(v)) placed[v] = idxOf[k];
+  for (const [k, v] of Object.entries(sec.fixed)) placed[v] = idxOf[k];
+  const nearBad = (other) => placed[other] !== undefined && geo.adj[me * geo.N + placed[other]] === 1;
+  for (const [a, b] of sec.apart) {
+    if (a === sid && nearBad(b)) return false;
+    if (b === sid && nearBad(a)) return false;
+  }
+  if (state.drawOpts.mode !== 'random') {
+    const st = studentById(sid);
+    if (st.avoidAdj.some(nearBad)) return false;
+    if (st.avoidGroup.some((o) => placed[o] !== undefined && geo.sameGroup(me, placed[o]))) return false;
+  }
+  return true;
+}
+
+function pickSeat(seatId) {
+  const d = ui.drawing;
+  if (!d || d.mode !== 'pick' || d.busy) return;
+  if (!d.current) { toast('先選座號'); return; }
+  const occ = state.assign[seatId];
+  if (occ && d.done.has(occ)) { toast('這個位子已經有人了'); return; }
+  const sid = d.current;
+  if (!canPick(sid, seatId)) { toast('這個位子不能選，請換一個位子', 2600); return; }
+  // 已揭曉的同學和這次自選的位子固定，其他人重新照老師的設定排
+  const extra = { [seatId]: sid };
+  for (const [k, v] of Object.entries(state.assign)) if (d.done.has(v) && v !== sid && k !== seatId) extra[k] = v;
+  optimize(state.drawOpts.mode !== 'random', extra);
+  save();
+  const st = studentById(sid);
+  d.done.add(sid);
+  d.last = sid;
+  d.current = null;
+  playDing();
+  renderRoom();
+  setDrawLabel(`${st.no} 號 ${st.name} 選好了！`);
+  renderDrawPad();
+}
+
 function renderDrawPad() {
   const d = ui.drawing;
   if (!d) return;
@@ -1531,10 +1608,13 @@ function renderDrawPad() {
       <b>${esc(st.no)}</b><small>${esc(st.name)}</small></button>`;
   }).join('');
   const left = state.students.filter((x) => !d.done.has(x.id)).length;
+  $$('#drawModes [data-dmode]').forEach((b) => b.classList.toggle('on', b.dataset.dmode === d.mode));
+  $('#drawShake').hidden = d.mode === 'pick';
   const shakeBtn = $('#drawShake');
   shakeBtn.disabled = d.busy || !d.current;
   shakeBtn.textContent = d.busy ? '搖籤中…' : d.current ? `🙏 ${studentById(d.current)?.no} 號，搖籤筒！` : '先選座號';
   $('#drawLeft').textContent = left ? `還有 ${left} 人` : '全部抽完 🎉';
+  $('#drawRemember').hidden = !!left;
 }
 
 async function drawShake() {
@@ -1547,7 +1627,9 @@ async function drawShake() {
   const stick = $('#drawStick');
   stick.classList.remove('rise');
   $('#drawTube').classList.add('shake');
-  await new Promise((r) => setTimeout(r, SHAKE_MS[state.drawOpts.speed] || SHAKE_MS.mid));
+  const shakeMs = SHAKE_MS[state.drawOpts.speed] || SHAKE_MS.mid;
+  playRattle(shakeMs);
+  await new Promise((r) => setTimeout(r, shakeMs));
   $('#drawTube').classList.remove('shake');
   // 跳出寫著名字的籤（直書：一個字一行）
   const chars = [...st.name];
@@ -1556,7 +1638,9 @@ async function drawShake() {
   $('#drawNo').textContent = `${st.no}號`;
   void stick.offsetWidth;
   stick.classList.add('rise');
+  playDing();
   d.done.add(st.id);
+  if (state.students.every((x) => d.done.has(x.id))) setTimeout(playFanfare, 700);
   d.last = st.id;
   d.current = null;
   d.busy = false;
@@ -1581,7 +1665,7 @@ function endDraw() {
   if (left && !confirm(`還有 ${left} 人沒抽，結束後會直接顯示全部座位。確定結束？`)) return;
   ui.drawing = null;
   $('#drawBanner').hidden = true;
-  document.body.classList.remove('is-drawing');
+  document.body.classList.remove('is-drawing', 'pick-mode');
   renderSeatsPanel();
   toast('抽籤結束');
 }
@@ -1635,25 +1719,149 @@ function prevSeatIndex(pv, seats) {
   return seats.findIndex((x) => Math.abs(x.x - pv.x) < DESK_W / 2 && Math.abs(x.y - pv.y) < DESK_H / 2);
 }
 
+/** 記住的座位：最新在前，最多 3 次 */
+const prevRecords = () => [state.prev, ...(state.prevHistory || [])].filter((r) => r && r.seats).slice(0, 3);
+const prevN = () => clamp(Number(state.conditions.prevSeat?.n) || 1, 1, 3);
+const fmtTime = (t) => { const d = new Date(t); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+
 function prevInfoText() {
   if (!state.prev?.at) return '📌 尚未記住上次座位';
-  const d = new Date(state.prev.at);
-  return `📌 上次座位：${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')} 記錄`;
+  const n = prevRecords().length;
+  return `📌 上次座位：${fmtTime(state.prev.at)} 記錄${n > 1 ? `（共記住 ${n} 次）` : ''}`;
 }
 
 function rememberSeating() {
-  if (state.prev?.at && !confirm(`用目前的座位取代「上次座位」（${prevInfoText().replace('📌 上次座位：', '')}）？`)) return;
   const g = geometry();
   const seats = {};
   state.seats.forEach((s, i) => {
     const st = state.assign[s.id];
     if (st) seats[st] = { seatId: s.id, x: s.x, y: s.y, side: g.sideCat[i] };
   });
+  const same = state.prev?.seats && Object.keys(seats).length === Object.keys(state.prev.seats).length
+    && Object.entries(seats).every(([k, v]) => state.prev.seats[k]?.seatId === v.seatId);
+  // 舊的往後推，最多保留 3 次；同一份座位重複按只更新時間
+  if (!same && state.prev?.seats) state.prevHistory = [state.prev, ...(state.prevHistory || [])].slice(0, 2);
   state.prev = { at: Date.now(), seats };
   save();
+  exportData();
   renderSeatsPanel();
-  toast('已記住這次座位，下次換座位時會避開同一個位子、並提醒左右換邊');
+  toast('已記住這次座位，並把備份檔下載到「下載」資料夾', 3500);
 }
+
+/** 下載資料備份（JSON） */
+function exportData() {
+  const d = new Date();
+  const ymd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  state.lastBackup = Date.now();
+  save();
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${state.className || '班級'}-座位資料-${ymd}.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+/* ---------- 下載座位表圖片 ---------- */
+function downloadSeatImage() {
+  const pad = 30, titleH = 56, S = 2;
+  const b = roomBounds();
+  const W = b.maxX - b.minX + DESK_W + pad * 2;
+  const RH = b.maxY - b.minY + DESK_H + pad * 2 + PODIUM_SPACE;
+  const H = RH + titleH;
+  const cv = document.createElement('canvas');
+  cv.width = W * S; cv.height = H * S;
+  const ctx = cv.getContext('2d');
+  ctx.scale(S, S);
+  const font = getComputedStyle(document.body).fontFamily;
+  const rr = (x, y, w, h, r) => { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); };
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#1f2328'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = `700 22px ${font}`;
+  ctx.fillText(`${state.className || ''} 座位表`.trim(), W / 2, 26);
+  ctx.font = `12px ${font}`; ctx.fillStyle = '#6b7280';
+  ctx.fillText(fmtTime(Date.now()), W / 2, 46);
+  ctx.translate(0, titleH);
+  // 講台
+  const pw = Math.min(260, W - 40), py = state.flipped ? RH - pad - 40 : pad - 10;
+  ctx.fillStyle = '#3d4a45'; rr((W - pw) / 2, py, pw, 40, 6); ctx.fill();
+  ctx.fillStyle = '#e9efe9'; ctx.font = `14px ${font}`; ctx.fillText('講　台', W / 2, py + 20);
+  // 組別標籤
+  const groups = {};
+  state.seats.forEach((st) => {
+    if (!groupNum(st.group)) return;
+    const v = toView(st.x, st.y, b, pad);
+    const g = groups[st.group] || (groups[st.group] = { x: Infinity, y: Infinity, maxY: -Infinity });
+    g.x = Math.min(g.x, v.x); g.y = Math.min(g.y, v.y); g.maxY = Math.max(g.maxY, v.y);
+  });
+  ctx.textAlign = 'left'; ctx.fillStyle = '#6b7280'; ctx.font = `600 12px ${font}`;
+  for (const [k, g] of Object.entries(groups)) ctx.fillText(`第 ${groupNum(k)} 組`, g.x, state.flipped ? g.maxY + DESK_H + 10 : g.y - 9);
+  // 桌子
+  for (const seat of state.seats) {
+    const v = toView(seat.x, seat.y, b, pad);
+    const st = studentById(state.assign[seat.id]);
+    ctx.fillStyle = st ? '#fffdf7' : '#f5f5f5'; ctx.strokeStyle = '#d6cfbf'; ctx.lineWidth = 1.5;
+    rr(v.x, v.y, DESK_W, DESK_H, 7); ctx.fill(); ctx.stroke();
+    if (!st) { ctx.fillStyle = '#9ca3af'; ctx.textAlign = 'center'; ctx.font = `13px ${font}`; ctx.fillText('空位', v.x + DESK_W / 2, v.y + DESK_H / 2); continue; }
+    ctx.fillStyle = st.gender === 'M' ? '#3b82c4' : st.gender === 'F' ? '#d0578f' : '#d6cfbf';
+    ctx.save(); rr(v.x, v.y, DESK_W, DESK_H, 7); ctx.clip(); ctx.fillRect(v.x, v.y, 5, DESK_H); ctx.restore();
+    ctx.fillStyle = '#6b7280'; ctx.textAlign = 'left'; ctx.font = `11px ${font}`; ctx.fillText(String(st.no), v.x + 9, v.y + 10);
+    let fs = 24;
+    ctx.font = `700 ${fs}px ${font}`;
+    while (fs > 11 && ctx.measureText(st.name).width > DESK_W - 16) { fs--; ctx.font = `700 ${fs}px ${font}`; }
+    ctx.fillStyle = '#1f2328'; ctx.textAlign = 'center';
+    ctx.fillText(st.name, v.x + DESK_W / 2 + 2, v.y + DESK_H / 2 + 5);
+  }
+  cv.toBlob((blob) => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${state.className || '班級'}-座位表.png`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }, 'image/png');
+}
+
+/* ---------- 抽籤音效（不需要音檔，用瀏覽器合成） ---------- */
+let audioCtx = null;
+function sfx() {
+  if (state.drawOpts.sound === 'off') return null;
+  try {
+    audioCtx ||= new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return audioCtx;
+  } catch { return null; }
+}
+function playRattle(ms) {
+  const ac = sfx(); if (!ac) return;
+  const len = Math.floor(ac.sampleRate * 0.05);
+  const buf = ac.createBuffer(1, len, ac.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3);
+  const t0 = ac.currentTime;
+  for (let t = 0; t < ms / 1000; t += 0.07 + Math.random() * 0.05) {
+    const src = ac.createBufferSource(); src.buffer = buf;
+    const f = ac.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1800 + Math.random() * 1500; f.Q.value = 3;
+    const g = ac.createGain(); g.gain.value = 0.5;
+    src.connect(f).connect(g).connect(ac.destination);
+    src.start(t0 + t);
+  }
+}
+function playTone(freqs, gap = 0, dur = 0.6, vol = 0.25) {
+  const ac = sfx(); if (!ac) return;
+  const t0 = ac.currentTime;
+  freqs.forEach((fr, i) => {
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = 'sine'; o.frequency.value = fr;
+    const st = t0 + i * gap;
+    g.gain.setValueAtTime(0.0001, st);
+    g.gain.exponentialRampToValueAtTime(vol, st + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, st + dur);
+    o.connect(g).connect(ac.destination);
+    o.start(st); o.stop(st + dur + 0.05);
+  });
+}
+const playDing = () => playTone([1046.5, 1568], 0, 0.9, 0.18);
+const playFanfare = () => playTone([523.25, 659.25, 783.99, 1046.5], 0.14, 0.7, 0.2);
 
 /* ---------- 組別 ---------- */
 /** 依位置自動分組：桌子邊緣相距很近（含斜角）就算同一組；單獨一張桌子不分組 */
@@ -1859,13 +2067,23 @@ function bindSeatsPanel() {
     if (!b || !ui.drawing || ui.drawing.busy) return;
     ui.drawing.current = b.dataset.drawNo;
     const st = studentById(ui.drawing.current);
-    setDrawLabel(`${st.no} 號 ${st.name}，請搖籤筒`);
+    setDrawLabel(ui.drawing.mode === 'pick' ? `${st.no} 號 ${st.name}，請在座位表上點你想坐的位子` : `${st.no} 號 ${st.name}，請搖籤筒`);
     renderDrawPad();
+  });
+  $('#drawModes').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-dmode]');
+    if (b) setDrawMode(b.dataset.dmode);
+  });
+  $('#room').addEventListener('click', (e) => {
+    const desk = e.target.closest('.desk');
+    if (desk && ui.drawing?.mode === 'pick') pickSeat(desk.dataset.seat);
   });
   $('#drawShake').addEventListener('click', drawShake);
   $('#drawTube').addEventListener('click', drawShake);
   $('#drawRevealAll').addEventListener('click', () => { if (confirm('直接揭曉所有還沒抽的座位？')) revealAll(); });
   $('#drawEnd').addEventListener('click', endDraw);
+  $('#drawRemember').addEventListener('click', () => { rememberSeating(); endDraw(); });
+  $('#btnImage').addEventListener('click', downloadSeatImage);
   $('#layoutOpts').addEventListener('click', (e) => {
     if (e.target.closest('[data-save-custom]')) openMapDialog('copy');
     if (e.target.closest('[data-auto-group]')) autoGroup();
@@ -2075,14 +2293,7 @@ function bindGlobal() {
   cn.value = state.className || '';
   cn.addEventListener('input', () => { state.className = cn.value; save(); });
 
-  $('#btnExport').addEventListener('click', () => {
-    const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `${state.className || '班級'}-座位資料.json`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-  });
+  $('#btnExport').addEventListener('click', () => { exportData(); toast('備份檔已下載到「下載」資料夾', 3000); });
   $('#fileImport').addEventListener('change', async (e) => {
     const f = e.target.files[0];
     e.target.value = '';
@@ -2112,6 +2323,12 @@ function bindGlobal() {
 }
 
 bindGlobal();
+// 太久沒備份時提醒（資料只存在這個瀏覽器裡）
+setTimeout(() => {
+  const days = state.lastBackup ? (Date.now() - state.lastBackup) / 864e5 : Infinity;
+  const hasData = state.prev || state.students.some((x) => !/^學生\d+$/.test(x.name));
+  if (hasData && days > 14) toast(state.lastBackup ? `已經 ${Math.floor(days)} 天沒有備份了，建議按右上角「匯出」存一份` : '提醒：資料只存在這個瀏覽器，建議按右上角「匯出」備份', 6000);
+}, 800);
 bindStudentsPanel();
 bindSeatsPanel();
 bindSecret();

@@ -103,6 +103,7 @@
         <button class="btn small" id="btnUnlockAll">解除全部鎖定</button>
         <button class="btn small secret-btn" id="btnSecret">說明</button>
         <button class="btn small" id="btnBig" title="投影給學生看：只顯示座位表">📺 大屏</button>
+        <button class="btn small" id="btnImage" title="下載座位表圖片（PNG），可傳到 LINE">🖼 下載圖片</button>
         <button class="btn small" id="btnPrint">🖨 列印</button>
       </div>
     </section>
@@ -179,6 +180,10 @@
   </dialog>
 
   <div class="draw-stage" id="drawBanner" hidden>
+    <div class="draw-modes" id="drawModes">
+      <button data-dmode="draw" class="on">🎰 抽籤</button>
+      <button data-dmode="pick">⭐ 自選座位</button>
+    </div>
     <div class="draw-label" id="drawLabel"></div>
     <div class="qian">
       <div class="qian-out" id="drawStick"><span class="qian-no" id="drawNo"></span><span class="qian-name" id="drawName"></span></div>
@@ -191,6 +196,7 @@
     <div class="draw-left" id="drawLeft"></div>
     <div class="draw-pad" id="drawPad"></div>
     <div class="draw-foot">
+      <button class="btn small draw-remember" id="drawRemember" hidden>📌 記住這次座位</button>
       <button class="btn small" id="drawRevealAll">全部揭曉</button>
       <button class="btn small" id="drawEnd">結束抽籤</button>
     </div>
