@@ -1121,7 +1121,8 @@ function renderLayoutOpts() {
   } else if (L.type === 'map') {
     const m = currentMap();
     html = `<label>名稱 <input type="text" class="map-name" value="${esc(m?.name)}" data-map-name aria-label="座位圖名稱"></label>
-      <span class="hint">${m?.seats.length || 0} 個座位；可新增、刪除、拖動座位，會自動記住</span>`;
+      <button class="btn small" data-auto-group title="把靠在一起的桌子自動分成同一組">依位置自動分組</button>
+      <span class="hint">${m?.seats.length || 0} 個座位、${groupKeys().length} 組；可新增、刪除、拖動座位，會自動記住</span>`;
   } else {
     html = `<span class="hint">${n > 24 ? '內外雙層 ㄇ 字型' : '單層 ㄇ 字型'}，開口朝向講台</span>`;
   }
@@ -1563,6 +1564,36 @@ function canEditDesks() {
 }
 
 /* ---------- 組別 ---------- */
+/** 依位置自動分組：桌子邊緣相距很近（含斜角）就算同一組；單獨一張桌子不分組 */
+function autoGroup() {
+  const seats = state.seats;
+  if (groupKeys().length && !confirm('依桌子位置重新分組？目前的組別會被取代。')) return;
+  const GAP = 32;
+  const parent = seats.map((_, i) => i);
+  const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  for (let i = 0; i < seats.length; i++) {
+    for (let j = i + 1; j < seats.length; j++) {
+      const gx = Math.abs(seats[i].x - seats[j].x) - DESK_W;
+      const gy = Math.abs(seats[i].y - seats[j].y) - DESK_H;
+      if (gx <= GAP && gy <= GAP) parent[find(i)] = find(j);
+    }
+  }
+  const members = {};
+  seats.forEach((s, i) => { (members[find(i)] ||= []).push(s); });
+  // 組號依前到後、左到右（以每組最前面的桌子為準）
+  const clusters = Object.values(members).filter((m) => m.length > 1)
+    .map((m) => ({ m, top: seatOrder(m)[0] }))
+    .sort((a, b) => (a.top.y - b.top.y) || (a.top.x - b.top.x));
+  pushHistory();
+  seats.forEach((s) => { s.group = null; });
+  clusters.forEach((c, k) => c.m.forEach((s) => { s.group = 'G' + (k + 1); }));
+  markDesksEdited();
+  save();
+  renderSeatsPanel();
+  const single = seats.length - clusters.reduce((n, c) => n + c.m.length, 0);
+  toast(`已分成 ${clusters.length} 組${single ? `（${single} 張單獨的桌子不分組）` : ''}`);
+}
+
 const groupNum = (g) => (/^G\d+$/.test(g || '') ? Number(g.slice(1)) : 0);
 function groupKeys() {
   return [...new Set(state.seats.map((s) => s.group).filter(groupNum))].sort((a, b) => groupNum(a) - groupNum(b));
@@ -1742,6 +1773,7 @@ function bindSeatsPanel() {
   $('#drawEnd').addEventListener('click', endDraw);
   $('#layoutOpts').addEventListener('click', (e) => {
     if (e.target.closest('[data-save-custom]')) openMapDialog('copy');
+    if (e.target.closest('[data-auto-group]')) autoGroup();
   });
   $('#layoutOpts').addEventListener('input', (e) => {
     if (!('mapName' in e.target.dataset)) return;
