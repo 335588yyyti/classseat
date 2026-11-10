@@ -50,7 +50,7 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 function newStudent(no) {
   return {
-    id: uid(), no, name: '學生' + no, gender: '', myopia: false, height: '', hlevel: '', note: '',
+    id: uid(), no, name: '學生' + no, gender: '', myopia: false, height: '', hlevel: '', score: '', note: '',
     tags: [], avoidAdj: [], avoidGroup: [], preferGroup: [], pref: 'any', hpref: 'any',
   };
 }
@@ -67,6 +67,7 @@ function defaultState() {
       myopia: { on: true, weight: 3 },
       height: { on: true, weight: 2 },
       gender: { on: true, weight: 1 },
+      score: { on: false, weight: 2 },
       prevSeat: { on: true, weight: 3, n: 1 },
       prevSide: { on: true, weight: 2 },
     },
@@ -488,6 +489,13 @@ function buildModel() {
     sidePull[i] = s.hpref === 'outer' ? 5 : s.hpref === 'center' ? -5 : 0;
   });
   const gender = studs.map((s) => s.gender || '');
+  // 成績：換成全班名次百分位（0＝最低、1＝最高），沒填的不算
+  const wS = c.score?.on ? WEIGHT_MUL[c.score.weight] : 0;
+  const scoreVals = studs.map((s) => parseFloat(s.score));
+  const scoredIdx = studs.map((_, i) => i).filter((i) => !Number.isNaN(scoreVals[i])).sort((a, b) => scoreVals[a] - scoreVals[b]);
+  const scoreP = new Float64Array(studs.length).fill(-1);
+  scoredIdx.forEach((i, r) => { scoreP[i] = scoredIdx.length > 1 ? r / (scoredIdx.length - 1) : 0.5; });
+  const useScore = wS && scoredIdx.length >= 4;
 
   function cost(occ, pos) {
     let t = 0;
@@ -515,6 +523,24 @@ function buildModel() {
         if (sa < 0 || sb < 0) continue;
         if (gender[sa] === 'M' && gender[sb] === 'M') t += wG * 8;
       }
+    }
+    // 成績：隔壁的兩人程度太接近就扣分（分組時改看各組平均）
+    if (useScore && !isGroups) {
+      for (const [a, b] of rowPairs) {
+        const sa = occ[a], sb = occ[b];
+        if (sa < 0 || sb < 0 || scoreP[sa] < 0 || scoreP[sb] < 0) continue;
+        const d = Math.abs(scoreP[sa] - scoreP[sb]);
+        if (d < 0.3) t += wS * 10 * (0.3 - d) / 0.3;
+      }
+    }
+    if (useScore && isGroups && groupCount) {
+      const sum = new Float64Array(groupCount), cnt = new Int16Array(groupCount);
+      for (let x = 0; x < occ.length; x++) {
+        const st = occ[x], g = groupIdx[x];
+        if (st < 0 || g < 0 || scoreP[st] < 0) continue;
+        sum[g] += scoreP[st]; cnt[g]++;
+      }
+      for (let g = 0; g < groupCount; g++) if (cnt[g]) t += wS * 40 * Math.abs(sum[g] / cnt[g] - 0.5);
     }
     if (spreadTags.length) {
       for (const [a, b] of adjPairs) {
@@ -772,7 +798,9 @@ function renderStats() {
   const f = s.filter((x) => x.gender === 'F').length;
   const myo = s.filter((x) => x.myopia).length;
   const rules = s.reduce((n, x) => n + x.avoidAdj.length + x.avoidGroup.length + x.preferGroup.length, 0) / 2;
-  $('#studentStats').textContent = `共 ${s.length} 人．男 ${m}．女 ${f}．未填性別 ${s.length - m - f}．近視 ${myo}．人際規則 ${rules} 條`;
+  const scored = s.map((x) => parseFloat(x.score)).filter((v) => !Number.isNaN(v));
+  const avg = scored.length ? `．成績 ${scored.length} 人（平均 ${(scored.reduce((a, b) => a + b, 0) / scored.length).toFixed(1)}）` : '';
+  $('#studentStats').textContent = `共 ${s.length} 人．男 ${m}．女 ${f}．未填性別 ${s.length - m - f}．近視 ${myo}${avg}．人際規則 ${rules} 條`;
   $('#btnAddStudent').disabled = s.length >= MAX_N;
 }
 
@@ -786,6 +814,7 @@ function renderConditions() {
     ['myopia', '👓 視力', '近視坐前排', '近視的同學優先安排在前排'],
     ['height', '📏 身高', '矮前高後', '矮的同學坐前面、高的坐後面（填公分或選 矮／中矮／中／中高／高）'],
     ['gender', '⚥ 性別', '男生旁邊放女生', '男生的左右兩旁盡量安排女生；女生旁邊不限制'],
+    ['score', '📊 成績', '高低分互助', '分組：各組平均分數盡量接近；直排／ㄇ字型：成績相近的同學盡量不坐隔壁（需填成績）'],
     ['prevSeat', '🔁 換位子', '不坐坐過的位子', '不要坐最近幾次坐過的位子（在座位安排按「📌 記住這次座位」記錄，最多記 3 次）'],
     ['prevSide', '↔ 左右換邊', '上次左側→換右側', '上次坐左側的換到右側、右側的換到左側；中間的不限（需先「📌 記住這次座位」）'],
   ];
@@ -861,6 +890,7 @@ function renderTable() {
           <button data-gender="M" class="${s.gender === 'M' ? 'on' : ''}">男</button><button data-gender="F" class="${s.gender === 'F' ? 'on' : ''}">女</button>
         </span>
         <label class="sc-pill ${s.myopia ? 'on' : ''}"><input type="checkbox" data-f="myopia" ${s.myopia ? 'checked' : ''}>👓 近視</label>
+        <label class="sc-score">成績<input type="number" min="0" max="100" step="any" placeholder="成績" value="${esc(s.score)}" data-f="score" aria-label="成績">分</label>
       </div>
       <div class="sc-hrow">
         <span class="sc-hk">身高</span>
@@ -929,6 +959,32 @@ function renderRuleDialog() {
   const top = body.scrollTop;
   body.innerHTML = ruleDialogHtml(s);
   body.scrollTop = top;
+}
+
+/**
+ * 解析批次貼上的一行：
+ *   開頭的數字（1～99）＝座號；男／女；近視；矮～高；
+ *   101 以上的數字或「152cm」＝身高；100 以下的數字或「85分」「成績85」＝成績；其他文字＝姓名
+ */
+function parseStudentLine(line, defaultNo) {
+  const st = newStudent(defaultNo);
+  const tokens = line.split(/[\s,，、\t]+/).filter(Boolean);
+  const rest = [];
+  tokens.forEach((tk, k) => {
+    const num = (re) => { const m = tk.match(re); return m ? Number(m[1]) : null; };
+    let v;
+    if (k === 0 && /^\d{1,2}[.、:：號]?$/.test(tk) && tokens.length > 1) st.no = Number(tk.replace(/\D/g, ''));
+    else if (/^(男|M|m|boy)$/.test(tk)) st.gender = 'M';
+    else if (/^(女|F|f|girl)$/.test(tk)) st.gender = 'F';
+    else if (/^近視$/.test(tk)) st.myopia = true;
+    else if (/^(高|中高|普|中|中矮|矮)$/.test(tk)) st.hlevel = { 高: 'tall', 中高: 'midtall', 普: 'mid', 中: 'mid', 中矮: 'midshort', 矮: 'short' }[tk];
+    else if ((v = num(/^(\d{2,3}(?:\.\d+)?)\s*(?:cm|公分)$/i)) !== null) st.height = v;
+    else if ((v = num(/^(?:成績[:：]?)?(\d{1,3}(?:\.\d+)?)\s*分$/)) !== null || (v = num(/^成績[:：]?(\d{1,3}(?:\.\d+)?)$/)) !== null) st.score = v;
+    else if ((v = num(/^(\d{1,3}(?:\.\d+)?)$/)) !== null) { if (v > 100) st.height = v; else st.score = v; }
+    else rest.push(tk);
+  });
+  if (rest.length) st.name = rest.join(' ');
+  return st;
 }
 
 function setStudentCount(n) {
@@ -1163,21 +1219,7 @@ function bindStudentsPanel() {
     if ($('#batchDialog').returnValue !== 'ok') return;
     const lines = $('#batchText').value.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
     if (!lines.length) return;
-    const list = lines.slice(0, MAX_N).map((line, i) => {
-      const st = newStudent(i + 1);
-      const tokens = line.split(/[\s,，、\t]+/).filter(Boolean);
-      const rest = [];
-      for (const tk of tokens) {
-        if (/^(男|M|m|boy)$/.test(tk)) st.gender = 'M';
-        else if (/^(女|F|f|girl)$/.test(tk)) st.gender = 'F';
-        else if (/^近視$/.test(tk)) st.myopia = true;
-        else if (/^\d{2,3}(\.\d+)?$/.test(tk) && Number(tk) >= 80) st.height = Number(tk);
-        else if (/^(高|中高|普|中|中矮|矮)$/.test(tk)) st.hlevel = { 高: 'tall', 中高: 'midtall', 普: 'mid', 中: 'mid', 中矮: 'midshort', 矮: 'short' }[tk];
-        else rest.push(tk);
-      }
-      if (rest.length) st.name = rest.join(' ');
-      return st;
-    });
+    const list = lines.slice(0, MAX_N).map((line, i) => parseStudentLine(line, i + 1));
     while (list.length < MIN_N) list.push(newStudent(list.length + 1));
     state.students = list;
     state.assign = {};
@@ -2803,6 +2845,7 @@ function renderSelInfo() {
   box.innerHTML = `<dl>
     <dt>學生</dt><dd><strong>${esc(s.no)}. ${esc(s.name)}</strong> ${s.gender === 'M' ? '（男）' : s.gender === 'F' ? '（女）' : ''}</dd>
     ${state.prev?.seats?.[s.id] ? `<dt>上次座位</dt><dd>${SIDE_LABEL[state.prev.seats[s.id].side]}</dd>` : ''}
+    ${s.score !== '' && s.score !== undefined ? `<dt>成績</dt><dd>${esc(s.score)} 分</dd>` : ''}
     <dt>近視／身高</dt><dd>${s.myopia ? '近視' : '—'}／${s.height ? esc(s.height) + ' cm' : s.hlevel ? HLEVEL_LABEL[s.hlevel] : '—'}</dd>
     <dt>座位偏好</dt><dd>前後：${PREF_LABEL[s.pref]}；左右：${HPREF_LABEL[s.hpref || 'any']}</dd>
     <dt>不可相鄰</dt><dd>${names(s.avoidAdj)}</dd>
