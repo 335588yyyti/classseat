@@ -90,7 +90,7 @@ function defaultState() {
 
 function load() {
   try {
-    const raw = localStorage.getItem(STORE_KEY);
+    const raw = store().getItem(storeKey());
     if (!raw) return null;
     return normalize(JSON.parse(raw));
   } catch {
@@ -130,12 +130,59 @@ function normalize(data) {
   return s;
 }
 
+/* ---------- 雲端（Firebase）：班級代碼＋老師密碼 ---------- */
+// 把 Firebase 專案的設定貼在這裡（Firebase 主控台 → 專案設定 → 你的應用程式 → SDK 設定），雲端功能就會出現
+// 例：{ apiKey: '...', authDomain: '...firebaseapp.com', projectId: '...', appId: '...' }
+const FIREBASE_CONFIG = null;
+const FB_CONFIG_KEY = 'classseat-firebase-config';
+const SESSION_KEY = 'classseat-session';
+const classKey = (code) => 'classseat-class:' + code;
+function getSession() {
+  try { return JSON.parse(localStorage.getItem(SESSION_KEY) || sessionStorage.getItem(SESSION_KEY) || 'null'); } catch { return null; }
+}
+function setSession(sess) {
+  if (sess?.kiosk) { try { sessionStorage.setItem(KIOSK_KEY, JSON.stringify(sess)); } catch { /* ignore */ } return; }
+  try {
+    localStorage.removeItem(SESSION_KEY);
+    sessionStorage.removeItem(SESSION_KEY);
+    if (sess) (sess.remember ? localStorage : sessionStorage).setItem(SESSION_KEY, JSON.stringify(sess));
+  } catch { /* 無痕模式等情況 */ }
+}
+/* 抽籤專用連結：#draw=班級代碼&t=連結代碼。打開後馬上把網址列上的連結代碼拿掉，只存在這個分頁 */
+const KIOSK_KEY = 'classseat-kiosk';
+function readKiosk() {
+  const m = location.hash.match(/^#draw=([^&]+)&t=([^&]+)/);
+  if (m) {
+    const k = { kiosk: true, code: decodeURIComponent(m[1]), token: m[2], updatedAt: 0, syncedHash: '' };
+    try { sessionStorage.setItem(KIOSK_KEY, JSON.stringify(k)); } catch { /* ignore */ }
+    history.replaceState(null, '', location.pathname + location.search);
+    return k;
+  }
+  try { return JSON.parse(sessionStorage.getItem(KIOSK_KEY) || 'null'); } catch { return null; }
+}
+const KIOSK = readKiosk();
+// 已經開著網頁時又點了抽籤連結：重新載入成抽籤模式
+window.addEventListener('hashchange', () => { if (/^#draw=/.test(location.hash)) location.reload(); });
+const cloud = { session: KIOSK || getSession(), status: 'idle', busy: false, pending: false, timer: null };
+const storeKey = () => (cloud.session ? (cloud.session.kiosk ? 'classseat-kiosk-data:' : 'classseat-class:') + cloud.session.code : STORE_KEY);
+// 抽籤專用模式的資料只放在這個分頁（關掉就沒了），不會留在學校的電腦上
+const store = () => (cloud.session?.kiosk ? sessionStorage : localStorage);
+/** 字串的簡單雜湊，用來判斷資料有沒有變（不是加密用） */
+function hashStr(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return (h >>> 0).toString(36) + ':' + str.length;
+}
+
 let state = load() || defaultState();
 let saveTimer = null;
 function save() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch { /* 無痕模式等情況 */ }
+    const json = JSON.stringify(state);
+    try { store().setItem(storeKey(), json); } catch { /* 無痕模式等情況 */ }
+    // 登入雲端班級時，資料有變就排程上傳
+    if (cloud.session && hashStr(json) !== cloud.session.syncedHash) scheduleCloudSave();
   }, 200);
 }
 
@@ -884,6 +931,56 @@ function renderRuleDialog() {
   body.scrollTop = top;
 }
 
+/**
+ * 解析批次貼上的一行，可以寫：
+ *   開頭的數字＝座號；第一個看不懂的詞＝姓名，之後看不懂的詞放進備註
+ *   男／女、近視、身高（公分或 矮／中矮／中／中高／高）
+ *   前排／後排、外側／中間（座位偏好）
+ *   自訂條件名稱（例如 需要關注），或「#新條件」
+ *   不要跟王小明坐、不可同組:李小華、跟陳大同同組（對象可寫名字或座號，多位用 / 隔開）
+ *   備註:xxx 或 （xxx）
+ */
+function parseStudentLine(line, defaultNo, newTags = []) {
+  const st = newStudent(defaultNo);
+  const rels = [];
+  const notes = [];
+  let named = false;
+  // 括號裡的文字整段當備註（可以有空白）
+  line = line.replace(/[（(]([^）)]*)[）)]/g, (m, x) => { if (x.trim()) notes.push(x.trim()); return ' '; });
+  const tokens = line.split(/[\s,，、\t]+/).filter(Boolean);
+  const addRel = (key, who) => who.split(/[\/／+＋]/).map((x) => x.trim()).filter(Boolean).forEach((w) => rels.push([key, w]));
+  const findTag = (name) => state.tags.find((t) => t.name === name);
+  tokens.forEach((tk, k) => {
+    let m;
+    if (k === 0 && /^\d{1,2}[.、:：號]?$/.test(tk) && tokens.length > 1) st.no = Number(tk.replace(/\D/g, ''));
+    else if (/^(男|男生|M|m|boy)$/.test(tk)) st.gender = 'M';
+    else if (/^(女|女生|F|f|girl)$/.test(tk)) st.gender = 'F';
+    else if (/^近視$/.test(tk)) st.myopia = true;
+    else if (/^(高|中高|普|中|中矮|矮)$/.test(tk)) st.hlevel = { 高: 'tall', 中高: 'midtall', 普: 'mid', 中: 'mid', 中矮: 'midshort', 矮: 'short' }[tk];
+    else if ((m = tk.match(/^(\d{2,3}(?:\.\d+)?)(?:cm|公分)?$/i)) && Number(m[1]) >= 80 && Number(m[1]) <= 220) st.height = Number(m[1]);
+    else if (/^(前排|坐前排|坐前面|靠前|盡量前排|前面)$/.test(tk)) st.pref = 'front';
+    else if (/^(後排|坐後排|坐後面|靠後|盡量後排|後面)$/.test(tk)) st.pref = 'back';
+    else if (/^(外側|靠外側|靠窗|靠邊|盡量外側)$/.test(tk)) st.hpref = 'outer';
+    else if (/^(中間|靠中間|盡量中間)$/.test(tk)) st.hpref = 'center';
+    else if ((m = tk.match(/^(?:不相鄰|不可相鄰|不要相鄰)[:：](.+)$/))) addRel('avoidAdj', m[1]);
+    else if ((m = tk.match(/^(?:不同組|不可同組|不要同組)[:：](.+)$/))) addRel('avoidGroup', m[1]);
+    else if ((m = tk.match(/^(?:同組|盡量同組|要同組)[:：](.+)$/))) addRel('preferGroup', m[1]);
+    else if ((m = tk.match(/^不(?:要|可|能|可以)?(?:跟|和|與)(.+?)同組$/))) addRel('avoidGroup', m[1]);
+    else if ((m = tk.match(/^不(?:要|可|能|可以)?(?:跟|和|與)(.+?)(?:坐|相鄰|坐隔壁|隔壁|坐一起|坐在一起)$/))) addRel('avoidAdj', m[1]);
+    else if ((m = tk.match(/^(?:要|想|盡量)?(?:跟|和|與)(.+?)(?:同組|一組|坐一起|坐在一起)$/))) addRel('preferGroup', m[1]);
+    else if ((m = tk.match(/^備註[:：](.+)$/))) notes.push(m[1]);
+    else if ((m = tk.match(/^[#＃](.+)$/)) || findTag(tk)) {
+      const name = m ? m[1] : tk;
+      let t = findTag(name);
+      if (!t) { t = { id: uid(), name, strategy: 'none', weight: 2 }; state.tags.push(t); newTags.push(name); }
+      if (!st.tags.includes(t.id)) st.tags.push(t.id);
+    } else if (!named) { st.name = tk; named = true; }
+    else notes.push(tk);
+  });
+  if (notes.length) st.note = notes.join('，');
+  return { st, rels };
+}
+
 function setStudentCount(n) {
   n = clamp(n | 0, MIN_N, MAX_N);
   const cur = state.students.length;
@@ -1116,29 +1213,33 @@ function bindStudentsPanel() {
     if ($('#batchDialog').returnValue !== 'ok') return;
     const lines = $('#batchText').value.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
     if (!lines.length) return;
-    const list = lines.slice(0, MAX_N).map((line, i) => {
-      const st = newStudent(i + 1);
-      const tokens = line.split(/[\s,，、\t]+/).filter(Boolean);
-      const rest = [];
-      for (const tk of tokens) {
-        if (/^(男|M|m|boy)$/.test(tk)) st.gender = 'M';
-        else if (/^(女|F|f|girl)$/.test(tk)) st.gender = 'F';
-        else if (/^近視$/.test(tk)) st.myopia = true;
-        else if (/^\d{2,3}(\.\d+)?$/.test(tk) && Number(tk) >= 80) st.height = Number(tk);
-        else if (/^(高|中高|普|中|中矮|矮)$/.test(tk)) st.hlevel = { 高: 'tall', 中高: 'midtall', 普: 'mid', 中: 'mid', 中矮: 'midshort', 矮: 'short' }[tk];
-        else rest.push(tk);
-      }
-      if (rest.length) st.name = rest.join(' ');
-      return st;
-    });
+    const newTags = [];
+    const parsed = lines.slice(0, MAX_N).map((line, i) => parseStudentLine(line, i + 1, newTags));
+    const list = parsed.map((x) => x.st);
     while (list.length < MIN_N) list.push(newStudent(list.length + 1));
     state.students = list;
+    // 第二輪：把「不要跟誰坐」「跟誰同組」對到名單上的同學（名字或座號）
+    const warn = [];
+    const findStu = (q) => {
+      const t = q.replace(/號$/, '').trim();
+      return list.find((x) => x.name === t) || (/^\d+$/.test(t) ? list.find((x) => String(x.no) === t) : null) || list.find((x) => x.name.includes(t) && t.length >= 2);
+    };
+    let ruleN = 0;
+    parsed.forEach(({ st, rels }) => {
+      for (const [key, who] of rels) {
+        const o = findStu(who);
+        if (!o || o.id === st.id) { warn.push(`${st.name}：找不到「${who}」`); continue; }
+        setRelation(st.id, o.id, key, true);
+        ruleN++;
+      }
+    });
     state.assign = {};
     state.locked = [];
     ui.selected = null;
     relayout();
     afterStudentsChanged();
-    toast(`已匯入 ${Math.min(lines.length, MAX_N)} 位學生${lines.length > MAX_N ? '（超過 40 人的部分已略過）' : ''}`);
+    toast(`已匯入 ${Math.min(lines.length, MAX_N)} 位學生${ruleN ? `、${ruleN} 條同學關係` : ''}${newTags.length ? `，新增條件「${newTags.join('、')}」（請到排座條件設定安排方式）` : ''}${lines.length > MAX_N ? '（超過 40 人的部分已略過）' : ''}`, 5000);
+    if (warn.length) alert(`有些同學關係對不到名單上的人，請到學生卡片的「條件設定」手動設定：\n\n${warn.slice(0, 12).join('\n')}${warn.length > 12 ? `\n…等 ${warn.length} 項` : ''}`);
   });
 }
 
@@ -1321,11 +1422,27 @@ function renderRoom() {
   }
 
   const seatNoMap = Object.fromEntries(seatOrder(state.seats).map((x, i) => [x.id, i + 1]));
+  const preDraw = document.body.classList.contains('big-screen') && !ui.drawing && !ui.revealed;
+  let preAssign = null;
+  if (preDraw && state.prev?.seats) {
+    preAssign = {};
+    for (const [sid, pv] of Object.entries(state.prev.seats)) {
+      const k = prevSeatIndex(pv, state.seats);
+      if (k >= 0 && studentById(sid) && !preAssign[state.seats[k].id]) preAssign[state.seats[k].id] = sid;
+    }
+  }
   for (const seat of state.seats) {
     const v = toView(seat.x, seat.y, b, pad);
     const st = studentById(state.assign[seat.id]);
     const cls = ['desk'];
     const clean = isClean();
+    if (preDraw) {
+      // 大屏還沒抽籤：顯示上次記住的座位，沒有紀錄就全部顯示「？」，不會先看到新的結果
+      const ps = studentById(preAssign?.[seat.id]);
+      if (!preAssign) html += st ? `<div class="desk draw-hidden" data-seat="${seat.id}" style="left:${v.x}px;top:${v.y}px"><span class="d-name">？</span></div>` : `<div class="desk empty" data-seat="${seat.id}" style="left:${v.x}px;top:${v.y}px"><span class="d-empty">空位</span></div>`;
+      else html += `<div class="desk ${ps ? (ps.gender ? 'g-' + ps.gender : '') : 'empty'}" data-seat="${seat.id}" style="left:${v.x}px;top:${v.y}px">${ps ? `<span class="d-no">${esc(ps.no)}</span><span class="d-name">${esc(ps.name)}</span>` : '<span class="d-empty">空位</span>'}</div>`;
+      continue;
+    }
     if (ui.drawing && st && !ui.drawing.done.has(st.id)) {
       // 還沒抽到：先藏起來
       html += `<div class="desk draw-hidden" data-seat="${seat.id}" style="left:${v.x}px;top:${v.y}px"><span class="d-name">？</span></div>`;
@@ -1706,6 +1823,7 @@ function endDraw() {
   const left = state.students.filter((x) => !ui.drawing.done.has(x.id)).length;
   if (left && !confirm(`還有 ${left} 人沒抽，結束後會直接顯示全部座位。確定結束？`)) return;
   ui.drawing = null;
+  ui.revealed = true;
   // 記下這份內定已經用過（下次老師重排時會提醒清空）
   if (Object.keys(state.secret.fixed).length) { state.secret.usedAt = Date.now(); save(); }
   $('#drawBanner').hidden = true;
@@ -1716,6 +1834,7 @@ function endDraw() {
 
 /* ---------- 大屏模式（投影給學生看） ---------- */
 function setBigScreen(on) {
+  ui.revealed = false; // 進大屏時先不顯示新的座位，抽完籤才揭曉
   document.body.classList.toggle('big-screen', on);
   $('#bigBar').hidden = !on;
   if (on) {
@@ -1790,9 +1909,9 @@ function rememberSeating() {
   if (!same && state.prev?.seats) state.prevHistory = [state.prev, ...(state.prevHistory || [])].slice(0, MAX_RECORDS - 1);
   state.prev = { at: Date.now(), seats };
   save();
-  exportData();
+  if (!cloud.session?.kiosk) exportData();
   renderSeatsPanel();
-  toast('已記住這次座位（可在「📚 紀錄／方案」查看），備份檔也下載到「下載」資料夾了', 4000);
+  toast(cloud.session?.kiosk ? '已記住這次座位' : '已記住這次座位（可在「📚 紀錄／方案」查看），備份檔也下載到「下載」資料夾了', 4000);
 }
 
 /** 下載資料備份（JSON） */
@@ -1807,6 +1926,524 @@ function exportData() {
   a.download = `${state.className || '班級'}-座位資料-${ymd}.json`;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+/* ---------- 雲端同步（Firebase Auth＋Firestore） ---------- */
+const FB_VERSION = '10.12.2';
+const FB_CLASSES = 'classseat_classes';   // 每個班級一份文件
+const FB_DRAWS = 'classseat_draws';       // 抽籤專用連結（文件代碼就是連結代碼）
+const fbConfig = () => { try { return JSON.parse(localStorage.getItem(FB_CONFIG_KEY) || 'null') || FIREBASE_CONFIG; } catch { return FIREBASE_CONFIG; } };
+const cloudEnabled = () => !!fbConfig()?.apiKey || !!cloud.session?.kiosk;
+const classEmail = (code) => `${code.toLowerCase()}@classseat.local`;
+const CODE_RE = /^[A-Za-z0-9_-]{2,20}$/;
+const CLOUD_ERR = {
+  code: '班級代碼要 2～20 個英文字母、數字、- 或 _（例如 302、class-3b）', key: '老師密碼至少 6 個字', exists: '這個班級代碼已經有人用了，請換一個',
+  notfound: '找不到這個班級代碼', wrongpass: '老師密碼不對', invalid: '班級代碼或老師密碼不對', locked: '嘗試太多次了，請過幾分鐘再試',
+  session: '這台裝置的登入已失效（可能在別台改了密碼），請重新登入',
+  kiosk: '這個抽籤連結已經失效或過期了，請老師重新產生一個',
+  toolarge: '資料太大，無法存到雲端', server: '雲端發生錯誤', action: '雲端設定不正確', offline: '連不上雲端，請檢查網路',
+};
+const cloudErrText = (r) => CLOUD_ERR[r.error] || '連線失敗';
+
+let fb = null;
+function loadScript(src) {
+  return new Promise((res, rej) => { const el = document.createElement('script'); el.src = src; el.onload = res; el.onerror = rej; document.head.appendChild(el); });
+}
+/** 需要時才載入 Firebase（沒用雲端的老師不會載入任何東西） */
+async function fbInit() {
+  if (fb) return fb;
+  const cfg = fbConfig();
+  if (!cfg?.apiKey) throw new Error('雲端還沒設定');
+  if (!window.firebase?.firestore) {
+    for (const m of ['app', 'auth', 'firestore']) await loadScript(`https://www.gstatic.com/firebasejs/${FB_VERSION}/firebase-${m}-compat.js`);
+  }
+  const app = firebase.apps.find((x) => x.name === 'classseat') || firebase.initializeApp(cfg, 'classseat');
+  const auth = app.auth(), db = app.firestore();
+  if (localStorage.getItem('classseat-fb-emulator')) { auth.useEmulator('http://127.0.0.1:9099'); db.useEmulator('127.0.0.1', 8080); }
+  // 等 Firebase 從瀏覽器讀回登入狀態
+  await new Promise((res) => { const off = auth.onAuthStateChanged(() => { off(); res(); }); });
+  fb = { app, auth, db, FieldValue: firebase.firestore.FieldValue, Timestamp: firebase.firestore.Timestamp, Persistence: firebase.auth.Auth.Persistence };
+  return fb;
+}
+const fbErr = (e) => {
+  const c = e?.code || '';
+  if (/email-already-in-use/.test(c)) return 'exists';
+  if (/user-not-found/.test(c)) return 'notfound';
+  if (/wrong-password/.test(c)) return 'wrongpass';
+  if (/invalid-credential|invalid-login|invalid-email/.test(c)) return 'invalid';
+  if (/too-many-requests/.test(c)) return 'locked';
+  if (/weak-password/.test(c)) return 'key';
+  if (/permission-denied|not-found/.test(c)) return 'session';
+  if (/unavailable|network/.test(c)) return 'offline';
+  return 'server';
+};
+const randomId = () => [...crypto.getRandomValues(new Uint8Array(24))].map((x) => x.toString(16).padStart(2, '0')).join('');
+
+/**
+ * 與雲端溝通（介面和原本一樣：回傳 { ok, ... } 或 { ok:false, error }）
+ * 老師：Firebase 帳號（班級代碼@classseat.local）；抽籤連結：classseat_draws/{連結代碼}
+ */
+async function cloudCall(action, p = {}) {
+  try {
+    const { auth, db, FieldValue, Timestamp, Persistence } = await fbInit();
+    const code = String(p.code || '').toLowerCase();
+    const classRef = db.collection(FB_CLASSES).doc(code);
+    const me = auth.currentUser;
+    const isMe = () => me && me.email === classEmail(code);
+
+    // ---- 抽籤連結（不需要登入）
+    if (p.token && p.token !== 'fb') {
+      const ref = db.collection(FB_DRAWS).doc(p.token);
+      if (action === 'load') {
+        const d = await ref.get();
+        if (!d.exists || d.data().code !== code || d.data().expiresAt.toMillis() < Date.now()) return { ok: false, error: 'session' };
+        return { ok: true, role: 'draw', data: d.data().data, updatedAt: d.data().updatedAt, name: d.data().name || '' };
+      }
+      if (action === 'save') {
+        const now = Date.now();
+        await ref.update({ data: p.data, updatedAt: now, kioskAt: now });
+        return { ok: true, updatedAt: now };
+      }
+      return { ok: false, error: 'action' };
+    }
+
+    if (action === 'create' || action === 'login') {
+      await auth.setPersistence(p.remember ? Persistence.LOCAL : Persistence.SESSION);
+      if (action === 'create') {
+        const cred = await auth.createUserWithEmailAndPassword(classEmail(code), p.pass);
+        const now = Date.now();
+        await classRef.set({ owner: cred.user.uid, name: p.name || '', data: p.data, updatedAt: now, passwdAt: 0 });
+        return { ok: true, token: 'fb', updatedAt: now };
+      }
+      await auth.signInWithEmailAndPassword(classEmail(code), p.pass);
+      const r = await loadClass(classRef, code);
+      return { ...r, token: 'fb' };
+    }
+
+    if (!isMe()) return { ok: false, error: 'session' };
+    if (action === 'load') {
+      const r = await loadClass(classRef, code);
+      if (r.ok && r.passwdAt > (p.loginAt || 0)) { await auth.signOut(); return { ok: false, error: 'session' }; }
+      return r;
+    }
+    if (action === 'save') {
+      const res = await db.runTransaction(async (tx) => {
+        const d = await tx.get(classRef);
+        const cur = d.exists ? d.data().updatedAt || 0 : 0;
+        if (!p.force && p.base && cur > p.base) return { ok: false, error: 'conflict', updatedAt: cur };
+        const t = Math.max(Date.now(), cur + 1);
+        tx.set(classRef, { owner: me.uid, name: p.name || '', data: p.data, updatedAt: t }, { merge: true });
+        return { ok: true, updatedAt: t };
+      });
+      // 有效的抽籤連結也一起換成最新資料
+      if (res.ok) {
+        const draws = await db.collection(FB_DRAWS).where('owner', '==', me.uid).where('code', '==', code).get();
+        // 學校抽完還沒合併回來的結果不要蓋掉（下次讀取時會合併）
+        await Promise.all(draws.docs.filter((x) => x.data().expiresAt.toMillis() > Date.now() && (x.data().kioskAt || 0) <= (x.data().mergedAt || 0))
+          .map((x) => x.ref.update({ data: p.data, name: p.name || '', updatedAt: res.updatedAt })));
+      }
+      return res;
+    }
+    if (action === 'passwd') {
+      try {
+        await me.reauthenticateWithCredential(firebase.auth.EmailAuthProvider.credential(me.email, p.oldPass));
+      } catch (e) { return { ok: false, error: /too-many/.test(e.code) ? 'locked' : 'wrongpass' }; }
+      await me.updatePassword(p.newPass);
+      const now = Date.now();
+      await classRef.update({ passwdAt: now });
+      await revokeDraws(db, me.uid, code);
+      return { ok: true, loginAt: now };
+    }
+    if (action === 'logout') { await auth.signOut(); return { ok: true }; }
+    if (action === 'drawlink') {
+      const hours = Math.min(168, Math.max(1, Number(p.hours) || 24));
+      const id = randomId();
+      const d = await classRef.get();
+      const exp = Date.now() + hours * 3600e3;
+      await db.collection(FB_DRAWS).doc(id).set({
+        owner: me.uid, code, name: d.data().name || '', data: d.data().data, updatedAt: d.data().updatedAt,
+        createdAt: Date.now(), expiresAt: Timestamp.fromMillis(exp), kioskAt: 0, mergedAt: 0,
+      });
+      return { ok: true, drawToken: id, expiresAt: exp };
+    }
+    if (action === 'drawrevoke') { await revokeDraws(db, me.uid, code); return { ok: true }; }
+    return { ok: false, error: 'action' };
+  } catch (e) {
+    if (e?.message === '雲端還沒設定') throw e;
+    return { ok: false, error: fbErr(e), message: String(e?.message || e) };
+  }
+}
+
+/** 讀班級；如果學校的抽籤連結有新的抽籤結果，先合併回班級 */
+async function loadClass(classRef, code) {
+  const { auth, db } = fb;
+  const d = await classRef.get();
+  if (!d.exists) return { ok: false, error: 'notfound' };
+  let { data, updatedAt, name, passwdAt } = d.data();
+  const draws = await db.collection(FB_DRAWS).where('owner', '==', auth.currentUser.uid).where('code', '==', code).get();
+  const fresh = draws.docs.map((x) => ({ ref: x.ref, ...x.data() }))
+    .filter((x) => (x.kioskAt || 0) > (x.mergedAt || 0))
+    .sort((x, y) => y.kioskAt - x.kioskAt)[0];
+  if (fresh) {
+    const t = Math.max(Date.now(), updatedAt + 1);
+    await classRef.update({ data: fresh.data, updatedAt: t });
+    await fresh.ref.update({ mergedAt: fresh.kioskAt });
+    data = fresh.data; updatedAt = t;
+  }
+  return { ok: true, data, updatedAt, name, passwdAt: passwdAt || 0, merged: !!fresh };
+}
+
+async function revokeDraws(db, uid, code) {
+  const draws = await db.collection(FB_DRAWS).where('owner', '==', uid).where('code', '==', code).get();
+  await Promise.all(draws.docs.map((x) => x.ref.delete()));
+}
+
+function setCloudStatus(st, msg = '') {
+  cloud.status = st;
+  cloud.msg = msg;
+  renderCloudButton();
+}
+
+function renderCloudButton() {
+  const b = $('#btnCloud');
+  if (!b) return;
+  const s = cloud.session;
+  const label = {
+    idle: '', ok: '✓ 已同步', saving: '同步中…', offline: '⚠ 離線，稍後同步', conflict: '⚠ 有衝突', error: '⚠ 未同步',
+  }[cloud.status] || '';
+  b.textContent = s ? `☁️ ${s.code} ${s.expired ? '⚠ 請重新登入' : label}`.trim() : '☁️ 雲端';
+  b.classList.toggle('warn', !!s && (s.expired || ['offline', 'conflict', 'error'].includes(cloud.status)));
+  b.classList.toggle('on', !!s);
+  b.title = s ? `雲端班級：${s.code}${cloud.msg ? '（' + cloud.msg + '）' : ''}` : '用班級代碼＋老師密碼存到雲端';
+}
+
+function scheduleCloudSave() {
+  clearTimeout(cloud.timer);
+  cloud.timer = setTimeout(() => cloudSave(), 2500);
+}
+
+async function cloudSave(force = false) {
+  const sess = cloud.session;
+  if (!sess || sess.expired) return;
+  if (cloud.busy) { cloud.pending = true; return; }
+  const json = JSON.stringify(state);
+  const h = hashStr(json);
+  if (!force && h === sess.syncedHash) { setCloudStatus('ok'); return; }
+  cloud.busy = true;
+  setCloudStatus('saving');
+  try {
+    const r = await cloudCall('save', { code: sess.code, token: sess.token, data: await makeDataCode(), base: sess.updatedAt, name: state.className || '', force });
+    if (r.ok) {
+      sess.updatedAt = r.updatedAt;
+      sess.syncedHash = h;
+      setSession(sess);
+      setCloudStatus('ok');
+    } else if (r.error === 'conflict') {
+      setCloudStatus('conflict');
+      openConflict(r.updatedAt);
+    } else if (r.error === 'session') {
+      sessionExpired();
+    } else if (r.error === 'offline') {
+      setCloudStatus('offline');
+    } else {
+      setCloudStatus('error', cloudErrText(r));
+    }
+  } catch {
+    setCloudStatus('offline');
+  } finally {
+    cloud.busy = false;
+    if (cloud.pending) { cloud.pending = false; scheduleCloudSave(); }
+  }
+}
+
+/** 換成雲端上的資料（同時更新這台的暫存） */
+function applyCloudState(newState, updatedAt) {
+  state = newState;
+  ui.history = []; ui.selected = null; ui.selSeat = null;
+  $('#className').value = state.className || '';
+  ensureSeating();
+  showTab(state.tab === 'seats' ? 'seats' : 'students');
+  const json = JSON.stringify(state);
+  try { store().setItem(storeKey(), json); } catch { /* ignore */ }
+  cloud.session.updatedAt = updatedAt;
+  cloud.session.syncedHash = hashStr(json);
+  setSession(cloud.session);
+  clearTimeout(cloud.timer);
+  setCloudStatus('ok');
+}
+
+/** 看看雲端有沒有其他裝置存的新資料 */
+async function cloudPull({ quiet = false } = {}) {
+  const sess = cloud.session;
+  if (!sess || sess.expired || cloud.busy || ui.drawing) return;
+  try {
+    const r = await cloudCall('load', { code: sess.code, token: sess.token, loginAt: sess.loginAt });
+    if (!r.ok) { if (r.error === 'session') sessionExpired(); else setCloudStatus(r.error === 'offline' ? 'offline' : 'error', cloudErrText(r)); return; }
+    const localDirty = hashStr(JSON.stringify(state)) !== sess.syncedHash;
+    if (r.updatedAt > (sess.updatedAt || 0)) {
+      if (localDirty) { setCloudStatus('conflict'); openConflict(r.updatedAt, r.data); return; }
+      const data = normalize(await readDataCode(r.data));
+      if (data) { applyCloudState(data, r.updatedAt); if (!quiet || r.merged) toast(r.merged ? '已收到學校抽籤的結果' : '已從雲端更新成最新資料', 4000); }
+    } else if (localDirty) {
+      cloudSave();
+    } else {
+      setCloudStatus('ok');
+    }
+  } catch {
+    setCloudStatus('offline');
+  }
+}
+
+/** 登入失效（別台改了密碼或登出）：保留這台的資料，請老師重新登入 */
+function sessionExpired() {
+  if (cloud.session?.kiosk) { kioskMessage(CLOUD_ERR.kiosk); return; }
+  const code = cloud.session?.code;
+  cloud.session.expired = true;
+  setSession(cloud.session);
+  setCloudStatus('error', CLOUD_ERR.session);
+  toast(CLOUD_ERR.session, 5000);
+  renderCloudDialog();
+  if (!$('#cloudDialog').open) $('#cloudDialog').showModal();
+  if ($('#clCode')) $('#clCode').value = code || '';
+}
+
+function openConflict(updatedAt, remoteData) {
+  cloud.conflict = { updatedAt, remoteData };
+  $('#conflictText').textContent = `雲端上有其他裝置在 ${fmtTime(updatedAt)} 存的資料，比這台的還新。這台也有還沒上傳的修改。要用哪一份？`;
+  if (!$('#conflictDialog').open) $('#conflictDialog').showModal();
+}
+
+async function resolveConflict(useCloud) {
+  $('#conflictDialog').close();
+  const sess = cloud.session;
+  if (!sess) return;
+  if (useCloud) {
+    try {
+      let { remoteData, updatedAt } = cloud.conflict || {};
+      if (!remoteData) {
+        const r = await cloudCall('load', { code: sess.code, token: sess.token, loginAt: sess.loginAt });
+        if (!r.ok) { toast(cloudErrText(r)); return; }
+        remoteData = r.data; updatedAt = r.updatedAt;
+      }
+      applyCloudState(normalize(await readDataCode(remoteData)), updatedAt);
+      toast('已換成雲端的資料');
+    } catch { setCloudStatus('offline'); }
+  } else {
+    await cloudSave(true);
+    toast('已用這台的資料覆蓋雲端');
+  }
+}
+
+/* ---------- 雲端視窗 ---------- */
+function renderCloudDialog() {
+  const sess = cloud.session;
+  let html = '';
+  if (sess && !sess.expired) {
+    html = `<div class="cl-box ok">
+        <div>目前登入：<b>${esc(sess.code)}</b>${state.className ? `（${esc(state.className)}）` : ''}</div>
+        <div class="hint">${cloud.status === 'ok' ? `✓ 已同步${sess.updatedAt ? '（' + fmtTime(sess.updatedAt) + '）' : ''}` : esc(renderStatusText())}</div>
+      </div>
+      <p class="hint">修改會自動存到雲端。在其他電腦或手機打開網頁、用同一組班級代碼和老師密碼登入，就是同一份資料。</p>
+      <div class="tf-row"><button class="btn primary" data-cl="sync">立即同步</button><button class="btn" data-cl="pull">從雲端重新載入</button></div>
+      <h3 class="sub">📺 抽籤專用連結</h3>
+      <p class="hint">產生一個連結，用 LINE 傳給自己。到學校在大屏的電腦點開，直接就是抽籤畫面，不會出現後台；抽籤結果會自動存回雲端，學校電腦不會留下資料。</p>
+      <div class="tf-row"><select id="clDrawHours" aria-label="有效期限"><option value="12">12 小時內有效</option><option value="24" selected>1 天內有效</option><option value="72">3 天內有效</option><option value="168">7 天內有效</option></select>
+        <button class="btn primary" data-cl="drawlink">產生抽籤連結</button><button class="btn small" data-cl="drawrevoke">停用所有抽籤連結</button></div>
+      <div class="tf-row" id="clDrawOut" hidden><input type="text" id="clDrawLink" readonly><button class="btn small" data-cl="drawcopy">複製</button></div>
+      <h3 class="sub">更改老師密碼</h3>
+      <div class="cl-form"><input type="password" id="clOldPass" placeholder="目前的密碼" autocomplete="current-password">
+        <div class="tf-row"><input type="password" id="clNewPass" placeholder="新密碼（至少 6 個字）" autocomplete="new-password"><button class="btn" data-cl="passwd">更改</button></div></div>
+      <p class="hint">改密碼後，其他已登入的裝置和所有抽籤連結都會失效，要用新密碼重新登入。</p>
+      <h3 class="sub">切換班級／登出</h3>
+      <div class="tf-row"><button class="btn" data-cl="logout">登出</button><button class="btn danger-text" data-cl="logout-clear">登出並清除這台的資料</button></div>
+      <p class="hint">在學校或別人的電腦用完，建議按「登出並清除這台的資料」。資料都還在雲端。</p>`;
+  } else {
+    html = `${sess?.expired ? `<div class="cl-box warn">⚠ ${CLOUD_ERR.session}</div>` : ''}<p class="hint">用「班級代碼＋老師密碼」登入，資料會存在雲端，任何電腦、手機都能打開同一個班。</p>
+      <div class="cl-form">
+        <label>班級代碼<input type="text" id="clCode" placeholder="例如 302" autocomplete="username" maxlength="20"></label>
+        <label>老師密碼<input type="password" id="clPass" placeholder="至少 6 個字" autocomplete="current-password"></label>
+        <label class="cl-check"><input type="checkbox" id="clRemember"> 記住這台裝置（自己的電腦或手機才勾）</label>
+      </div>
+      <div class="tf-row"><button class="btn primary" data-cl="login">登入</button></div>
+      <h3 class="sub">還沒有班級？建立新班級</h3>
+      <div class="cl-form">
+        <label>確認密碼<input type="password" id="clPass2" placeholder="再輸入一次老師密碼" autocomplete="new-password"></label>
+        <label class="cl-check"><input type="radio" name="clSrc" value="current" checked> 用目前畫面上的資料建立</label>
+        <label class="cl-check"><input type="radio" name="clSrc" value="blank"> 建立空白的新班級</label>
+      </div>
+      <div class="tf-row"><button class="btn" data-cl="create">建立新班級</button></div>
+      <p class="hint">班級代碼由你自己決定（英文字母或數字，例如 302、class3b），之後在其他電腦用同一組代碼和密碼登入。</p>`;
+  }
+  $('#cloudBody').innerHTML = html;
+  $('#cloudMsg').textContent = '';
+}
+
+const renderStatusText = () => ({ saving: '同步中…', offline: '⚠ 目前離線，連上網路後會自動同步', conflict: '⚠ 有衝突，請選擇要用哪一份', error: '⚠ ' + (cloud.msg || '還沒同步') }[cloud.status] || '');
+
+function cloudMsg(t, bad = true) {
+  const el = $('#cloudMsg');
+  el.textContent = t;
+  el.classList.toggle('bad', bad);
+}
+
+async function cloudAction(act) {
+  const val = (id) => ($(id)?.value || '').trim();
+  try {
+    if (act === 'login' || act === 'create') {
+      const code = val('#clCode').toLowerCase(), pass = $('#clPass').value;
+      if (!CODE_RE.test(code)) { cloudMsg(CLOUD_ERR.code); return; }
+      if (pass.length < 6) { cloudMsg(CLOUD_ERR.key); return; }
+      if (act === 'create' && pass !== $('#clPass2').value) { cloudMsg('兩次輸入的密碼不一樣'); return; }
+      const remember = $('#clRemember').checked;
+      const url = '';
+      cloudMsg(act === 'login' ? '登入中…' : '建立中…', false);
+      if (act === 'login') {
+        const r = await cloudCall('login', { code, pass, remember });
+        if (!r.ok) { cloudMsg(cloudErrText(r)); return; }
+        const data = normalize(await readDataCode(r.data));
+        if (!data) { cloudMsg('雲端資料格式不正確'); return; }
+        // 重新登入同一個班、而這台還有沒上傳的修改：先問要用哪一份
+        const old = cloud.session;
+        if (old?.expired && old.code === code && hashStr(JSON.stringify(state)) !== old.syncedHash) {
+          cloud.session = { url, code, token: r.token, remember, loginAt: Date.now(), updatedAt: old.updatedAt, syncedHash: old.syncedHash };
+          setSession(cloud.session);
+          $('#cloudDialog').close();
+          openConflict(r.updatedAt, r.data);
+          return;
+        }
+        if (old && old.code !== code) { try { localStorage.removeItem(classKey(old.code)); } catch { /* ignore */ } }
+        cloud.session = { url, code, token: r.token, remember, loginAt: Date.now(), updatedAt: r.updatedAt, syncedHash: '' };
+        applyCloudState(data, r.updatedAt);
+        toast(`已登入 ${code}`);
+      } else {
+        const src = $('input[name="clSrc"]:checked')?.value || 'current';
+        const newState = src === 'blank' ? defaultState() : JSON.parse(JSON.stringify(state));
+        const keep = state;
+        state = newState;
+        const data = await makeDataCode();
+        state = keep;
+        const r = await cloudCall('create', { code, pass, remember, name: newState.className || '', data });
+        if (!r.ok) { cloudMsg(cloudErrText(r)); return; }
+        cloud.session = { url, code, token: r.token, remember, loginAt: Date.now(), updatedAt: r.updatedAt, syncedHash: '' };
+        applyCloudState(normalize(newState), r.updatedAt);
+        toast(`已建立班級 ${code}，之後會自動存到雲端`);
+      }
+      $('#cloudDialog').close();
+      return;
+    }
+    if (act === 'drawlink') {
+      const sess = cloud.session;
+      await cloudSave();
+      const r = await cloudCall('drawlink', { code: sess.code, token: sess.token, hours: Number($('#clDrawHours').value) || 24 });
+      if (!r.ok) { cloudMsg(cloudErrText(r)); return; }
+      const link = `${location.origin + location.pathname}#draw=${encodeURIComponent(sess.code)}&t=${r.drawToken}`;
+      $('#clDrawOut').hidden = false;
+      $('#clDrawLink').value = link;
+      let copied = false;
+      try { await navigator.clipboard.writeText(link); copied = true; } catch { /* ignore */ }
+      cloudMsg(`${copied ? '✓ 已複製抽籤連結' : '✓ 已產生抽籤連結（請按「複製」）'}，${fmtTime(r.expiresAt)} 前有效。連結等於抽籤用的鑰匙，請只傳給自己。`, false);
+      return;
+    }
+    if (act === 'drawcopy') {
+      const el = $('#clDrawLink');
+      let copied = false;
+      try { await navigator.clipboard.writeText(el.value); copied = true; } catch { el.select(); try { copied = document.execCommand('copy'); } catch { /* ignore */ } }
+      cloudMsg(copied ? '✓ 已複製' : '請長按文字框全選後拷貝', !copied);
+      return;
+    }
+    if (act === 'drawrevoke') {
+      if (!confirm('停用所有已產生的抽籤連結？')) return;
+      const sess = cloud.session;
+      const r = await cloudCall('drawrevoke', { code: sess.code, token: sess.token });
+      cloudMsg(r.ok ? '✓ 所有抽籤連結都已停用' : cloudErrText(r), !r.ok);
+      return;
+    }
+    if (act === 'sync') { await cloudSave(true); renderCloudDialog(); return; }
+    if (act === 'pull') { await cloudPull(); renderCloudDialog(); return; }
+    if (act === 'passwd') {
+      const np = $('#clNewPass').value, op = $('#clOldPass').value;
+      if (!op) { cloudMsg('請輸入目前的密碼'); return; }
+      if (np.length < 6) { cloudMsg('新密碼至少 6 個字'); return; }
+      const sess = cloud.session;
+      const r = await cloudCall('passwd', { code: sess.code, token: sess.token, oldPass: op, newPass: np });
+      if (!r.ok) { cloudMsg(r.error === 'wrongpass' ? '目前的密碼不對' : cloudErrText(r)); return; }
+      sess.loginAt = r.loginAt + 1; setSession(sess);
+      $('#clNewPass').value = ''; $('#clOldPass').value = '';
+      cloudMsg('✓ 已更改老師密碼', false);
+      return;
+    }
+    if (act === 'logout' || act === 'logout-clear') {
+      const sess = cloud.session;
+      if (!sess.expired && hashStr(JSON.stringify(state)) !== sess.syncedHash) {
+        await cloudSave();
+        if (hashStr(JSON.stringify(state)) !== cloud.session?.syncedHash && !confirm('還有修改沒有存到雲端，確定要登出嗎？')) return;
+      }
+      if (act === 'logout-clear') { try { localStorage.removeItem(classKey(sess.code)); } catch { /* ignore */ } }
+      if (!sess.expired) await cloudCall('logout', { code: sess.code, token: sess.token }).catch(() => {});
+      cloud.session = null;
+      setSession(null);
+      clearTimeout(cloud.timer);
+      state = load() || defaultState();
+      ui.history = []; ui.selected = null; ui.selSeat = null;
+      $('#className').value = state.className || '';
+      ensureSeating();
+      showTab('students');
+      setCloudStatus('idle');
+      $('#cloudDialog').close();
+      toast(act === 'logout-clear' ? '已登出，並清除這台裝置上的班級資料' : '已登出');
+    }
+  } catch (err) {
+    cloudMsg(err.message && !/fetch|network|JSON|load/i.test(err.message) ? err.message : '連不上雲端，請檢查網路');
+  }
+}
+
+function bindCloud() {
+  $('#btnCloud').addEventListener('click', () => { renderCloudDialog(); $('#cloudDialog').showModal(); });
+  $('#cloudClose').addEventListener('click', () => $('#cloudDialog').close());
+  $('#cloudBody').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-cl]');
+    if (b) cloudAction(b.dataset.cl);
+  });
+  $('#cloudBody').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.target.id === 'clPass' || e.target.id === 'clCode')) cloudAction('login');
+  });
+  $('#conflictCloud').addEventListener('click', () => resolveConflict(true));
+  $('#conflictLocal').addEventListener('click', () => resolveConflict(false));
+  window.addEventListener('online', () => cloudSave());
+  // 切回這個分頁時，看看其他裝置有沒有新資料
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') cloudPull({ quiet: false }); });
+  document.body.classList.toggle('no-cloud', !cloudEnabled());
+  renderCloudButton();
+  if (cloud.session?.kiosk) startKiosk();
+  else if (cloud.session && cloudEnabled()) cloudPull({ quiet: true });
+  // 開著的時候每分鐘看一次其他裝置有沒有新資料
+  setInterval(() => { if (document.visibilityState === 'visible' && cloud.session && !cloud.session.kiosk) cloudPull({ quiet: false }); }, 60000);
+}
+
+/* ---------- 抽籤專用模式（給學校大屏） ---------- */
+function kioskMessage(text) {
+  const el = $('#kioskCover');
+  el.hidden = false;
+  $('#kioskText').textContent = text;
+}
+
+async function startKiosk() {
+  document.body.classList.add('kiosk');
+  kioskMessage('載入中…');
+  const sess = cloud.session;
+  try {
+    const r = await cloudCall('load', { code: sess.code, token: sess.token });
+    if (!r.ok) { kioskMessage(r.error === 'session' ? CLOUD_ERR.kiosk : cloudErrText(r)); return; }
+    // 抽籤連結只顯示畫面，不需要 Firebase 設定以外的東西
+    const data = normalize(await readDataCode(r.data));
+    if (!data) { kioskMessage('雲端資料格式不正確'); return; }
+    data.tab = 'seats';
+    applyCloudState(data, r.updatedAt);
+    $('#kioskCover').hidden = true;
+    setBigScreen(true);
+  } catch {
+    kioskMessage('連不上雲端，請確認網路後重新整理');
+  }
 }
 
 /* ---------- 資料碼（壓縮後的文字，方便用 LINE／Email 搬到其他裝置） ---------- */
@@ -2278,7 +2915,10 @@ function bindSeatsPanel() {
   $('#mapDialog').addEventListener('close', () => { if ($('#mapDialog').returnValue === 'ok') createMap(); });
   // 按「抽籤」直接進入籤筒畫面，設定在「說明」面板裡
   $('#btnDraw').addEventListener('click', startDraw);
-  $('#bigDraw').addEventListener('click', startDraw);
+  $('#bigDraw').addEventListener('click', () => {
+    if (document.body.classList.contains('kiosk') && !document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});
+    startDraw();
+  });
   $('#btnBig').addEventListener('click', () => setBigScreen(true));
   $('#btnRemember').addEventListener('click', rememberSeating);
   $('#bigExit').addEventListener('click', () => setBigScreen(false));
@@ -2578,12 +3218,13 @@ bindGlobal();
 // 太久沒備份時提醒（資料只存在這個瀏覽器裡）
 setTimeout(() => {
   const days = state.lastBackup ? (Date.now() - state.lastBackup) / 864e5 : Infinity;
-  const hasData = state.prev || state.students.some((x) => !/^學生\d+$/.test(x.name));
+  const hasData = !cloud.session && (state.prev || state.students.some((x) => !/^學生\d+$/.test(x.name)));
   if (hasData && days > 14) toast(state.lastBackup ? `已經 ${Math.floor(days)} 天沒有備份了，建議按右上角「💾 備份／搬移」存一份` : '提醒：資料只存在這個瀏覽器，建議按右上角「💾 備份／搬移」備份', 6000);
 }, 800);
 bindStudentsPanel();
 bindSeatsPanel();
 bindSecret();
 bindRecords();
+bindCloud();
 ensureSeating();
 showTab(state.tab === 'seats' ? 'seats' : 'students');
