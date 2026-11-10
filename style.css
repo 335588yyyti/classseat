@@ -487,3 +487,6 @@ body.kiosk .class-name::placeholder { color: transparent; }
 .kiosk-icon { font-size: 64px; }
 .kiosk-cover p { font-size: 20px; line-height: 1.6; }
 body.no-cloud .cloud-btn { display: none !important; }
+.batch-help { font-size: 13px; }
+.batch-help summary { cursor: pointer; color: var(--accent); }
+.batch-help ul { margin: 6px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; }

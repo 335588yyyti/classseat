@@ -141,9 +141,20 @@
   <dialog id="batchDialog">
     <form method="dialog" class="dlg">
       <h2>批次貼上名單</h2>
-      <p class="hint">每行一位學生，可接性別、身高、近視（以空白或逗號分隔），例如：<br>
-        <code>王小明 男 152 近視</code><br><code>李小華,女,148</code><br><code>陳大同 男 高</code>（身高也可寫 矮／中矮／中／中高／高）</p>
-      <textarea id="batchText" rows="14" placeholder="王小明 男 152 近視&#10;李小華 女 148"></textarea>
+      <p class="hint">每行一位學生，第一個是姓名（前面可以加座號），後面用空白或逗號接特徵和要求，例如：<br>
+        <code>1 王小明 男 152 近視 前排</code><br>
+        <code>2 李小華 女 中高 需要關注 不要跟王小明坐</code><br>
+        <code>3 陳大同 男 矮 容易聊天 跟5號同組（媽媽希望坐前面）</code></p>
+      <details class="batch-help"><summary>可以寫哪些？</summary>
+        <ul class="hint">
+          <li>性別：男／女；近視；身高：公分（例如 152）或 矮／中矮／中／中高／高，交給系統依身高排</li>
+          <li>座位偏好：前排／後排、外側／中間</li>
+          <li>自訂條件：直接寫條件名稱（例如 需要關注、容易聊天），或「#新條件」會自動新增</li>
+          <li>同學關係：不要跟某某坐、不要跟某某同組、跟某某同組；也可寫「不相鄰:某某」「不同組:某某」「同組:某某」。對象可寫名字或座號，多位用 / 隔開（例如 不要跟王小明/3號坐）</li>
+          <li>備註：括號裡的文字，或「備註:……」；看不懂的詞也會放進備註</li>
+        </ul>
+      </details>
+      <textarea id="batchText" rows="14" placeholder="1 王小明 男 152 近視 前排&#10;2 李小華 女 中高 需要關注 不要跟王小明坐"></textarea>
       <p class="hint">貼上後會<strong>取代</strong>目前名單（少於 26 人會自動補足，超過 40 人只取前 40 位）。</p>
       <div class="dlg-actions">
         <button class="btn" value="cancel">取消</button>

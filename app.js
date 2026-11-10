@@ -931,6 +931,56 @@ function renderRuleDialog() {
   body.scrollTop = top;
 }
 
+/**
+ * 解析批次貼上的一行，可以寫：
+ *   開頭的數字＝座號；第一個看不懂的詞＝姓名，之後看不懂的詞放進備註
+ *   男／女、近視、身高（公分或 矮／中矮／中／中高／高）
+ *   前排／後排、外側／中間（座位偏好）
+ *   自訂條件名稱（例如 需要關注），或「#新條件」
+ *   不要跟王小明坐、不可同組:李小華、跟陳大同同組（對象可寫名字或座號，多位用 / 隔開）
+ *   備註:xxx 或 （xxx）
+ */
+function parseStudentLine(line, defaultNo, newTags = []) {
+  const st = newStudent(defaultNo);
+  const rels = [];
+  const notes = [];
+  let named = false;
+  // 括號裡的文字整段當備註（可以有空白）
+  line = line.replace(/[（(]([^）)]*)[）)]/g, (m, x) => { if (x.trim()) notes.push(x.trim()); return ' '; });
+  const tokens = line.split(/[\s,，、\t]+/).filter(Boolean);
+  const addRel = (key, who) => who.split(/[\/／+＋]/).map((x) => x.trim()).filter(Boolean).forEach((w) => rels.push([key, w]));
+  const findTag = (name) => state.tags.find((t) => t.name === name);
+  tokens.forEach((tk, k) => {
+    let m;
+    if (k === 0 && /^\d{1,2}[.、:：號]?$/.test(tk) && tokens.length > 1) st.no = Number(tk.replace(/\D/g, ''));
+    else if (/^(男|男生|M|m|boy)$/.test(tk)) st.gender = 'M';
+    else if (/^(女|女生|F|f|girl)$/.test(tk)) st.gender = 'F';
+    else if (/^近視$/.test(tk)) st.myopia = true;
+    else if (/^(高|中高|普|中|中矮|矮)$/.test(tk)) st.hlevel = { 高: 'tall', 中高: 'midtall', 普: 'mid', 中: 'mid', 中矮: 'midshort', 矮: 'short' }[tk];
+    else if ((m = tk.match(/^(\d{2,3}(?:\.\d+)?)(?:cm|公分)?$/i)) && Number(m[1]) >= 80 && Number(m[1]) <= 220) st.height = Number(m[1]);
+    else if (/^(前排|坐前排|坐前面|靠前|盡量前排|前面)$/.test(tk)) st.pref = 'front';
+    else if (/^(後排|坐後排|坐後面|靠後|盡量後排|後面)$/.test(tk)) st.pref = 'back';
+    else if (/^(外側|靠外側|靠窗|靠邊|盡量外側)$/.test(tk)) st.hpref = 'outer';
+    else if (/^(中間|靠中間|盡量中間)$/.test(tk)) st.hpref = 'center';
+    else if ((m = tk.match(/^(?:不相鄰|不可相鄰|不要相鄰)[:：](.+)$/))) addRel('avoidAdj', m[1]);
+    else if ((m = tk.match(/^(?:不同組|不可同組|不要同組)[:：](.+)$/))) addRel('avoidGroup', m[1]);
+    else if ((m = tk.match(/^(?:同組|盡量同組|要同組)[:：](.+)$/))) addRel('preferGroup', m[1]);
+    else if ((m = tk.match(/^不(?:要|可|能|可以)?(?:跟|和|與)(.+?)同組$/))) addRel('avoidGroup', m[1]);
+    else if ((m = tk.match(/^不(?:要|可|能|可以)?(?:跟|和|與)(.+?)(?:坐|相鄰|坐隔壁|隔壁|坐一起|坐在一起)$/))) addRel('avoidAdj', m[1]);
+    else if ((m = tk.match(/^(?:要|想|盡量)?(?:跟|和|與)(.+?)(?:同組|一組|坐一起|坐在一起)$/))) addRel('preferGroup', m[1]);
+    else if ((m = tk.match(/^備註[:：](.+)$/))) notes.push(m[1]);
+    else if ((m = tk.match(/^[#＃](.+)$/)) || findTag(tk)) {
+      const name = m ? m[1] : tk;
+      let t = findTag(name);
+      if (!t) { t = { id: uid(), name, strategy: 'none', weight: 2 }; state.tags.push(t); newTags.push(name); }
+      if (!st.tags.includes(t.id)) st.tags.push(t.id);
+    } else if (!named) { st.name = tk; named = true; }
+    else notes.push(tk);
+  });
+  if (notes.length) st.note = notes.join('，');
+  return { st, rels };
+}
+
 function setStudentCount(n) {
   n = clamp(n | 0, MIN_N, MAX_N);
   const cur = state.students.length;
@@ -1163,29 +1213,33 @@ function bindStudentsPanel() {
     if ($('#batchDialog').returnValue !== 'ok') return;
     const lines = $('#batchText').value.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
     if (!lines.length) return;
-    const list = lines.slice(0, MAX_N).map((line, i) => {
-      const st = newStudent(i + 1);
-      const tokens = line.split(/[\s,，、\t]+/).filter(Boolean);
-      const rest = [];
-      for (const tk of tokens) {
-        if (/^(男|M|m|boy)$/.test(tk)) st.gender = 'M';
-        else if (/^(女|F|f|girl)$/.test(tk)) st.gender = 'F';
-        else if (/^近視$/.test(tk)) st.myopia = true;
-        else if (/^\d{2,3}(\.\d+)?$/.test(tk) && Number(tk) >= 80) st.height = Number(tk);
-        else if (/^(高|中高|普|中|中矮|矮)$/.test(tk)) st.hlevel = { 高: 'tall', 中高: 'midtall', 普: 'mid', 中: 'mid', 中矮: 'midshort', 矮: 'short' }[tk];
-        else rest.push(tk);
-      }
-      if (rest.length) st.name = rest.join(' ');
-      return st;
-    });
+    const newTags = [];
+    const parsed = lines.slice(0, MAX_N).map((line, i) => parseStudentLine(line, i + 1, newTags));
+    const list = parsed.map((x) => x.st);
     while (list.length < MIN_N) list.push(newStudent(list.length + 1));
     state.students = list;
+    // 第二輪：把「不要跟誰坐」「跟誰同組」對到名單上的同學（名字或座號）
+    const warn = [];
+    const findStu = (q) => {
+      const t = q.replace(/號$/, '').trim();
+      return list.find((x) => x.name === t) || (/^\d+$/.test(t) ? list.find((x) => String(x.no) === t) : null) || list.find((x) => x.name.includes(t) && t.length >= 2);
+    };
+    let ruleN = 0;
+    parsed.forEach(({ st, rels }) => {
+      for (const [key, who] of rels) {
+        const o = findStu(who);
+        if (!o || o.id === st.id) { warn.push(`${st.name}：找不到「${who}」`); continue; }
+        setRelation(st.id, o.id, key, true);
+        ruleN++;
+      }
+    });
     state.assign = {};
     state.locked = [];
     ui.selected = null;
     relayout();
     afterStudentsChanged();
-    toast(`已匯入 ${Math.min(lines.length, MAX_N)} 位學生${lines.length > MAX_N ? '（超過 40 人的部分已略過）' : ''}`);
+    toast(`已匯入 ${Math.min(lines.length, MAX_N)} 位學生${ruleN ? `、${ruleN} 條同學關係` : ''}${newTags.length ? `，新增條件「${newTags.join('、')}」（請到排座條件設定安排方式）` : ''}${lines.length > MAX_N ? '（超過 40 人的部分已略過）' : ''}`, 5000);
+    if (warn.length) alert(`有些同學關係對不到名單上的人，請到學生卡片的「條件設定」手動設定：\n\n${warn.slice(0, 12).join('\n')}${warn.length > 12 ? `\n…等 ${warn.length} 項` : ''}`);
   });
 }
 
