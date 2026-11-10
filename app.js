@@ -1576,6 +1576,8 @@ function renderSecret() {
 function bindSecret() {
   $('#btnSecret').addEventListener('click', () => { ui.secretMode = !ui.secretMode; renderSeatsPanel(); });
   $('#secretClose').addEventListener('click', () => { ui.secretMode = false; renderSeatsPanel(); });
+  $('#btnGuide').addEventListener('click', () => $('#guideDialog').showModal());
+  $('#guideClose').addEventListener('click', () => $('#guideDialog').close());
   const box = $('#secretBody');
   const sec = () => state.secret;
   const done = () => { save(); renderSeatsPanel(); };
