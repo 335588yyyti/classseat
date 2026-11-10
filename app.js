@@ -122,6 +122,7 @@ function normalize(data) {
   }
   s.secret = { fixed: {}, ban: {}, apart: [], backup: {}, ...(data.secret || {}) };
   s.drawOpts = { ...d.drawOpts, ...(data.drawOpts || {}) };
+  s.plans = Array.isArray(data.plans) ? data.plans : [];
   delete s.customLayout;
   delete s.freeLayout;
   s.assign = data.assign && typeof data.assign === 'object' ? data.assign : {};
@@ -1435,6 +1436,7 @@ function renderSecret() {
     </div>
     ${status}
     <div class="sec-block">
+      ${sec.usedAt && fixedCount ? `<div class="sec-status warn">⚠ 這些內定已在 ${fmtTime(sec.usedAt)} 的抽籤用過了。要重新排，請先按「取消全部內定」。</div>` : ''}
       <div class="sec-title">📋 整份座位內定</div>
       <p class="hint">把畫面上「目前的座位」全部設成一定抽到，學生抽籤時就會抽出一模一樣的結果。想留幾個位子讓學生真的隨機抽，點那個座位，把「一定抽到」改成「不指定」就好。</p>
       <div class="sec-pair"><button class="btn small" data-sec-fixall>照目前座位全部內定</button>
@@ -1464,6 +1466,7 @@ function bindSecret() {
     const seatId = ui.selSeat;
     const v = e.target.value;
     if ('secFixed' in e.target.dataset && seatId) {
+      delete sec().usedAt;
       for (const [k, x] of Object.entries(sec().fixed)) if (x === v) delete sec().fixed[k];
       if (v) {
         sec().fixed[seatId] = v;
@@ -1515,6 +1518,7 @@ function bindSecret() {
       ui.selected = state.assign[d.secPick] || null;
       renderSeatsPanel();
     } else if ('secFixall' in d) {
+      delete sec().usedAt;
       const n = Object.keys(state.assign).length;
       if (Object.keys(sec().fixed).length && !confirm('用目前的座位取代所有內定？')) return;
       sec().fixed = { ...state.assign };
@@ -1529,6 +1533,8 @@ function bindSecret() {
     } else if ('secUnfixall' in d) {
       if (!confirm('取消全部內定？（「不會抽到」和「不能坐隔壁」會保留）')) return;
       sec().fixed = {};
+      sec().backup = {};
+      delete sec().usedAt;
       ui.secretStatus = undefined;
       done();
     } else if ('secClear' in d) {
@@ -1538,6 +1544,19 @@ function bindSecret() {
       done();
     }
   });
+}
+
+/** 上次抽籤用過的內定還在時，老師重排前先問要不要清空（只在老師端操作時問，不在抽籤畫面問） */
+function askClearUsedFixed() {
+  const n = Object.keys(state.secret.fixed).length;
+  if (!state.secret.usedAt || !n) return;
+  if (confirm('上次抽籤用的座位說明還在，要先清空嗎？')) {
+    state.secret.fixed = {};
+    state.secret.backup = {};
+    toast('已清空');
+  }
+  delete state.secret.usedAt;
+  save();
 }
 
 /* ---------- 抽籤（學生一個一個上台搖籤筒） ---------- */
@@ -1687,6 +1706,8 @@ function endDraw() {
   const left = state.students.filter((x) => !ui.drawing.done.has(x.id)).length;
   if (left && !confirm(`還有 ${left} 人沒抽，結束後會直接顯示全部座位。確定結束？`)) return;
   ui.drawing = null;
+  // 記下這份內定已經用過（下次老師重排時會提醒清空）
+  if (Object.keys(state.secret.fixed).length) { state.secret.usedAt = Date.now(); save(); }
   $('#drawBanner').hidden = true;
   document.body.classList.remove('is-drawing', 'pick-mode');
   renderSeatsPanel();
@@ -1743,6 +1764,9 @@ function prevSeatIndex(pv, seats) {
 }
 
 /** 記住的座位：最新在前，最多 3 次 */
+const MAX_RECORDS = 10;
+/** 全部記住過的座位（最新在前，最多 10 次） */
+const allRecords = () => [state.prev, ...(state.prevHistory || [])].filter((r) => r && r.seats).slice(0, MAX_RECORDS);
 const prevRecords = () => [state.prev, ...(state.prevHistory || [])].filter((r) => r && r.seats).slice(0, 3);
 const prevN = () => clamp(Number(state.conditions.prevSeat?.n) || 1, 1, 3);
 const fmtTime = (t) => { const d = new Date(t); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
@@ -1763,12 +1787,12 @@ function rememberSeating() {
   const same = state.prev?.seats && Object.keys(seats).length === Object.keys(state.prev.seats).length
     && Object.entries(seats).every(([k, v]) => state.prev.seats[k]?.seatId === v.seatId);
   // 舊的往後推，最多保留 3 次；同一份座位重複按只更新時間
-  if (!same && state.prev?.seats) state.prevHistory = [state.prev, ...(state.prevHistory || [])].slice(0, 2);
+  if (!same && state.prev?.seats) state.prevHistory = [state.prev, ...(state.prevHistory || [])].slice(0, MAX_RECORDS - 1);
   state.prev = { at: Date.now(), seats };
   save();
   exportData();
   renderSeatsPanel();
-  toast('已記住這次座位，並把備份檔下載到「下載」資料夾', 3500);
+  toast('已記住這次座位（可在「📚 紀錄／方案」查看），備份檔也下載到「下載」資料夾了', 4000);
 }
 
 /** 下載資料備份（JSON） */
@@ -1785,10 +1809,33 @@ function exportData() {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+/* ---------- 資料碼（壓縮後的文字，方便用 LINE／Email 搬到其他裝置） ---------- */
+const CODE_PREFIX = 'CLASSSEAT1:';
+const toB64 = (bytes) => { let bin = ''; for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(bin); };
+const fromB64 = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+async function makeDataCode() {
+  const json = JSON.stringify(state);
+  if (typeof CompressionStream === 'undefined') return json;
+  const stream = new Blob([json]).stream().pipeThrough(new CompressionStream('gzip'));
+  const buf = new Uint8Array(await new Response(stream).arrayBuffer());
+  return CODE_PREFIX + toB64(buf);
+}
+async function readDataCode(text) {
+  const t = text.trim().replace(/\s+/g, '');
+  if (t.startsWith(CODE_PREFIX)) {
+    if (typeof DecompressionStream === 'undefined') throw new Error('bad');
+    const stream = new Blob([fromB64(t.slice(CODE_PREFIX.length))]).stream().pipeThrough(new DecompressionStream('gzip'));
+    return JSON.parse(await new Response(stream).text());
+  }
+  return JSON.parse(text);
+}
+
 /* ---------- 下載座位表圖片 ---------- */
-function downloadSeatImage() {
-  const pad = 30, titleH = 56, S = 2;
-  const b = roomBounds();
+/** 把一份座位畫成圖片（seats：[{id,x,y,group}]、assign：座位→學生） */
+function drawSeatCanvas(seats, assign, { title = `${state.className || ''} 座位表`.trim(), sub = fmtTime(Date.now()), scale = 2 } = {}) {
+  const pad = 30, titleH = 56, S = scale;
+  const xs = seats.map((x) => x.x), ys = seats.map((x) => x.y);
+  const b = { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
   const W = b.maxX - b.minX + DESK_W + pad * 2;
   const RH = b.maxY - b.minY + DESK_H + pad * 2 + PODIUM_SPACE;
   const H = RH + titleH;
@@ -1801,17 +1848,15 @@ function downloadSeatImage() {
   ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
   ctx.fillStyle = '#1f2328'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.font = `700 22px ${font}`;
-  ctx.fillText(`${state.className || ''} 座位表`.trim(), W / 2, 26);
+  ctx.fillText(title, W / 2, 26);
   ctx.font = `12px ${font}`; ctx.fillStyle = '#6b7280';
-  ctx.fillText(fmtTime(Date.now()), W / 2, 46);
+  ctx.fillText(sub, W / 2, 46);
   ctx.translate(0, titleH);
-  // 講台
   const pw = Math.min(260, W - 40), py = state.flipped ? RH - pad - 40 : pad - 10;
   ctx.fillStyle = '#3d4a45'; rr((W - pw) / 2, py, pw, 40, 6); ctx.fill();
   ctx.fillStyle = '#e9efe9'; ctx.font = `14px ${font}`; ctx.fillText('講　台', W / 2, py + 20);
-  // 組別標籤
   const groups = {};
-  state.seats.forEach((st) => {
+  seats.forEach((st) => {
     if (!groupNum(st.group)) return;
     const v = toView(st.x, st.y, b, pad);
     const g = groups[st.group] || (groups[st.group] = { x: Infinity, y: Infinity, maxY: -Infinity });
@@ -1819,10 +1864,9 @@ function downloadSeatImage() {
   });
   ctx.textAlign = 'left'; ctx.fillStyle = '#6b7280'; ctx.font = `600 12px ${font}`;
   for (const [k, g] of Object.entries(groups)) ctx.fillText(`第 ${groupNum(k)} 組`, g.x, state.flipped ? g.maxY + DESK_H + 10 : g.y - 9);
-  // 桌子
-  for (const seat of state.seats) {
+  for (const seat of seats) {
     const v = toView(seat.x, seat.y, b, pad);
-    const st = studentById(state.assign[seat.id]);
+    const st = studentById(assign[seat.id]);
     ctx.fillStyle = st ? '#fffdf7' : '#f5f5f5'; ctx.strokeStyle = '#d6cfbf'; ctx.lineWidth = 1.5;
     rr(v.x, v.y, DESK_W, DESK_H, 7); ctx.fill(); ctx.stroke();
     if (!st) { ctx.fillStyle = '#9ca3af'; ctx.textAlign = 'center'; ctx.font = `13px ${font}`; ctx.fillText('空位', v.x + DESK_W / 2, v.y + DESK_H / 2); continue; }
@@ -1835,13 +1879,166 @@ function downloadSeatImage() {
     ctx.fillStyle = '#1f2328'; ctx.textAlign = 'center';
     ctx.fillText(st.name, v.x + DESK_W / 2 + 2, v.y + DESK_H / 2 + 5);
   }
+  return cv;
+}
+
+function downloadCanvas(cv, filename) {
   cv.toBlob((blob) => {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `${state.className || '班級'}-座位表.png`;
+    a.download = filename;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }, 'image/png');
+}
+
+function downloadSeatImage() {
+  downloadCanvas(drawSeatCanvas(state.seats, state.assign), `${state.className || '班級'}-座位表.png`);
+}
+
+/* ---------- 📚 紀錄／方案 ---------- */
+/** 記住的座位 → 可以畫圖的座位清單 */
+function recordToSeats(rec) {
+  const seats = [], assign = {};
+  Object.entries(rec.seats).forEach(([sid, v], i) => {
+    const cur = state.seats.find((x) => x.id === v.seatId);
+    const id = 'r' + i;
+    seats.push({ id, x: v.x, y: v.y, group: cur?.group || null });
+    assign[id] = sid;
+  });
+  return { seats, assign };
+}
+
+const planSummary = (p) => {
+  const sec = p.secret;
+  if (!sec) return '只有座位';
+  const bits = [];
+  const f = Object.keys(sec.fixed || {}).length, bn = Object.keys(sec.ban || {}).length, ap = (sec.apart || []).length;
+  if (f) bits.push(`內定 ${f}`);
+  if (bn) bits.push(`不會抽到 ${bn}`);
+  if (ap) bits.push(`不能坐隔壁 ${ap}`);
+  return bits.length ? `含老師的安排：${bits.join('、')}` : '含老師的安排（目前沒有設定）';
+};
+
+function renderRecords() {
+  const tab = ui.recTab || 'hist';
+  $$('#recTabs [data-rtab]').forEach((b) => b.classList.toggle('active', b.dataset.rtab === tab));
+  const thumb = (seats, assign, title, sub) => drawSeatCanvas(seats, assign, { title, sub, scale: 1 }).toDataURL('image/png');
+  let html = '';
+  if (tab === 'hist') {
+    const recs = allRecords();
+    html = `<p class="hint">每按一次「📌 記住這次座位」就會存一筆在這裡（存在這台裝置的瀏覽器，最多 ${MAX_RECORDS} 次；用「💾 備份／搬移」可以帶到其他裝置）。排座條件「🔁 換位子」會參考最近 ${prevN()} 次。</p>`
+      + (recs.length ? recs.map((r, i) => {
+        const { seats, assign } = recordToSeats(r);
+        const label = i === 0 ? '最近一次' : `前 ${i + 1} 次`;
+        return `<div class="rec-item">
+          <img class="rec-thumb" src="${thumb(seats, assign, `${label}的座位`, fmtTime(r.at))}" alt="" data-rec-zoom="${i}">
+          <div class="rec-info"><b>${label}</b><span class="hint">${fmtTime(r.at)}・${Object.keys(r.seats).length} 人</span>
+            <div class="rec-actions"><button class="btn small" data-rec-zoom="${i}">放大看</button><button class="btn small" data-rec-apply="${i}">套用到座位表</button><button class="link-btn" data-rec-del="${i}">刪除</button></div></div>
+        </div>`;
+      }).join('') : '<p class="empty-note">還沒有紀錄。座位排好或抽完籤後，按工具列的「📌 記住這次座位」。</p>');
+  } else {
+    const plans = state.plans || [];
+    html = `<p class="hint">把目前的座位存成方案，之後一鍵載入（例如「段考版」「分組討論版」）。勾選「連同老師的安排」會一起存下內定、不會抽到、不能坐隔壁的設定。</p>
+      <div class="rec-save"><input type="text" id="planName" placeholder="方案名稱，例如：段考版" value="方案 ${plans.length + 1}">
+        <label><input type="checkbox" id="planWithSecret" checked> 連同老師的安排</label>
+        <button class="btn primary small" data-plan-save>＋ 存成新方案</button></div>`
+      + (plans.length ? plans.map((p, i) => `<div class="rec-item">
+          <img class="rec-thumb" src="${thumb(p.seats, p.assign, p.name, fmtTime(p.at))}" alt="" data-plan-zoom="${i}">
+          <div class="rec-info"><b>${esc(p.name)}</b><span class="hint">${fmtTime(p.at)}・${planSummary(p)}</span>
+            <div class="rec-actions"><button class="btn small" data-plan-zoom="${i}">放大看</button><button class="btn small" data-plan-load="${i}">載入</button><button class="btn small" data-plan-update="${i}">用目前覆蓋</button><button class="link-btn" data-plan-del="${i}">刪除</button></div></div>
+        </div>`).join('') : '<p class="empty-note">還沒有方案。</p>');
+  }
+  $('#recBody').innerHTML = html;
+}
+
+function zoomImage(src) {
+  $('#recZoomImg').src = src;
+  $('#recZoom').hidden = false;
+}
+
+function currentPlanData(withSecret) {
+  return {
+    at: Date.now(),
+    layout: JSON.parse(JSON.stringify(state.layout)),
+    seats: templateFrom(state.seats).map((x, i) => ({ ...x, id: state.seats[i].id })),
+    assign: { ...state.assign },
+    secret: withSecret ? JSON.parse(JSON.stringify(state.secret)) : null,
+  };
+}
+
+function bindRecords() {
+  $('#btnRecords').addEventListener('click', () => { ui.recTab ||= 'hist'; $('#recZoom').hidden = true; renderRecords(); $('#recDialog').showModal(); });
+  $('#recClose').addEventListener('click', () => $('#recDialog').close());
+  $('#recTabs').addEventListener('click', (e) => { const b = e.target.closest('[data-rtab]'); if (b) { ui.recTab = b.dataset.rtab; renderRecords(); } });
+  $('#recZoom').addEventListener('click', () => { $('#recZoom').hidden = true; });
+  $('#recBody').addEventListener('click', (e) => {
+    const el = e.target.closest('[data-rec-zoom],[data-rec-apply],[data-rec-del],[data-plan-save],[data-plan-zoom],[data-plan-load],[data-plan-update],[data-plan-del]');
+    if (!el) return;
+    const d = el.dataset;
+    const recs = allRecords();
+    if (d.recZoom !== undefined) {
+      const r = recs[+d.recZoom];
+      const { seats, assign } = recordToSeats(r);
+      zoomImage(drawSeatCanvas(seats, assign, { title: `${+d.recZoom === 0 ? '最近一次' : `前 ${+d.recZoom + 1} 次`}的座位`, sub: fmtTime(r.at) }).toDataURL('image/png'));
+    } else if (d.recApply !== undefined) {
+      const r = recs[+d.recApply];
+      if (!confirm(`把 ${fmtTime(r.at)} 的座位套用到目前的座位表？（可按「復原」）`)) return;
+      pushHistory();
+      const assign = {};
+      for (const [sid, v] of Object.entries(r.seats)) {
+        if (!studentById(sid)) continue;
+        const k = prevSeatIndex(v, state.seats);
+        if (k >= 0 && !assign[state.seats[k].id]) assign[state.seats[k].id] = sid;
+      }
+      state.assign = assign;
+      ensureSeating();
+      save(); renderSeatsPanel();
+      $('#recDialog').close();
+      toast('已套用');
+    } else if (d.recDel !== undefined) {
+      if (!confirm('刪除這筆座位紀錄？')) return;
+      const all = allRecords();
+      all.splice(+d.recDel, 1);
+      state.prev = all[0] || null;
+      state.prevHistory = all.slice(1);
+      save(); renderRecords(); renderConditions();
+    } else if ('planSave' in d) {
+      const name = $('#planName').value.trim() || `方案 ${(state.plans || []).length + 1}`;
+      state.plans = [...(state.plans || []), { id: uid(), name, ...currentPlanData($('#planWithSecret').checked) }];
+      save(); renderRecords();
+      toast(`已存成方案「${name}」`);
+    } else if (d.planZoom !== undefined) {
+      const p = state.plans[+d.planZoom];
+      zoomImage(drawSeatCanvas(p.seats, p.assign, { title: p.name, sub: fmtTime(p.at) }).toDataURL('image/png'));
+    } else if (d.planLoad !== undefined) {
+      const p = state.plans[+d.planLoad];
+      if (!confirm(`載入方案「${p.name}」？目前的座位${p.secret ? '和老師的安排' : ''}會被取代（可按「復原」）。`)) return;
+      pushHistory();
+      state.layout = JSON.parse(JSON.stringify(p.layout));
+      if (state.layout.type === 'map' && !state.maps.some((m) => m.id === state.layout.mapId)) state.layout.type = 'groups';
+      state.seats = p.seats.map((x) => ({ ...x }));
+      state.custom = true;
+      state.assign = Object.fromEntries(Object.entries(p.assign).filter(([, v]) => studentById(v)));
+      if (p.secret) state.secret = JSON.parse(JSON.stringify(p.secret));
+      ensureSeating();
+      cleanupSecret();
+      save(); renderSeatsPanel();
+      $('#recDialog').close();
+      toast(`已載入「${p.name}」`);
+    } else if (d.planUpdate !== undefined) {
+      const p = state.plans[+d.planUpdate];
+      if (!confirm(`用目前的座位${p.secret ? '和老師的安排' : ''}覆蓋方案「${p.name}」？`)) return;
+      Object.assign(p, currentPlanData(!!p.secret));
+      save(); renderRecords();
+      toast('已更新方案');
+    } else if (d.planDel !== undefined) {
+      const p = state.plans[+d.planDel];
+      if (!confirm(`刪除方案「${p.name}」？`)) return;
+      state.plans.splice(+d.planDel, 1);
+      save(); renderRecords();
+    }
+  });
 }
 
 /* ---------- 抽籤音效（不需要音檔，用瀏覽器合成） ---------- */
@@ -2134,6 +2331,7 @@ function bindSeatsPanel() {
     renderSeatsPanel();
   });
   $('#btnArrange').addEventListener('click', () => {
+    askClearUsedFixed();
     pushHistory();
     const btn = $('#btnArrange');
     btn.disabled = true;
@@ -2149,7 +2347,7 @@ function bindSeatsPanel() {
       toast(errs ? `已排座，但有 ${errs} 項規則無法同時滿足，請查看檢查結果` : '已依條件完成排座 ✓');
     }, 30);
   });
-  $('#btnRandom').addEventListener('click', () => { pushHistory(); optimize(false); save(); renderSeatsPanel(); toast('已隨機排座（鎖定的座位不變）'); });
+  $('#btnRandom').addEventListener('click', () => { askClearUsedFixed(); pushHistory(); optimize(false); save(); renderSeatsPanel(); toast('已隨機排座（鎖定的座位不變）'); });
   $('#btnUndo').addEventListener('click', () => {
     const h = ui.history.pop();
     if (!h) return;
@@ -2316,24 +2514,55 @@ function bindGlobal() {
   cn.value = state.className || '';
   cn.addEventListener('input', () => { state.className = cn.value; save(); });
 
-  $('#btnExport').addEventListener('click', () => { exportData(); toast('備份檔已下載到「下載」資料夾', 3000); });
+  // 備份／搬到其他裝置（手機、家裡電腦、學校電腦）
+  const importData = (raw) => {
+    const data = normalize(raw);
+    if (!data) throw new Error('bad');
+    if (data.students.length < MIN_N || data.students.length > MAX_N) throw new Error('count');
+    state = data;
+    ui.history = []; ui.selected = null; ui.selSeat = null;
+    cn.value = state.className || '';
+    ensureSeating();
+    save();
+    showTab(state.tab);
+  };
+  const importFail = (err) => toast(err.message === 'count' ? `匯入失敗：人數需介於 ${MIN_N}～${MAX_N}` : '匯入失敗：資料格式不正確', 3500);
+  $('#btnTransfer').addEventListener('click', () => { $('#tfText').value = ''; $('#tfInfo').textContent = ''; $('#transferDialog').showModal(); });
+  $('#tfClose').addEventListener('click', () => $('#transferDialog').close());
+  $('#tfDownload').addEventListener('click', () => { exportData(); toast('備份檔已下載到「下載」資料夾', 3000); });
+  $('#tfCopy').addEventListener('click', async () => {
+    const code = await makeDataCode();
+    state.lastBackup = Date.now(); save();
+    const ta = $('#tfText');
+    ta.value = code;
+    let copied = false;
+    try { await navigator.clipboard.writeText(code); copied = true; } catch { /* 不支援時改為手動複製 */ }
+    if (!copied) { ta.focus(); ta.select(); try { copied = document.execCommand('copy'); } catch { /* ignore */ } }
+    $('#tfInfo').textContent = (copied ? '✓ 已複製資料碼' : '請長按下方文字框「全選 → 拷貝」')
+      + `（${code.length} 字）。${code.length > 4500 ? '資料碼較長，LINE 一般訊息可能放不下，建議貼到 LINE Keep、Email 或 Google 文件，或改用「下載備份檔」。' : '可以用 LINE 傳給自己。'}`;
+  });
+  $('#tfPaste').addEventListener('click', async () => {
+    const text = $('#tfText').value.trim();
+    if (!text) { toast('請先把資料碼貼到文字框'); return; }
+    try {
+      const raw = await readDataCode(text);
+      if (!confirm('匯入會取代這台裝置目前的資料，確定嗎？')) return;
+      importData(raw);
+      $('#transferDialog').close();
+      toast('已匯入資料');
+    } catch (err) { importFail(err); }
+  });
   $('#fileImport').addEventListener('change', async (e) => {
     const f = e.target.files[0];
     e.target.value = '';
     if (!f) return;
     try {
-      const data = normalize(JSON.parse(await f.text()));
-      if (!data) throw new Error('bad');
-      if (data.students.length < MIN_N || data.students.length > MAX_N) throw new Error('count');
-      state = data;
-      ui.history = []; ui.selected = null; ui.selSeat = null;
-      cn.value = state.className || '';
-      ensureSeating();
-      showTab(state.tab);
+      const raw = await readDataCode(await f.text());
+      if (!confirm('匯入會取代這台裝置目前的資料，確定嗎？')) return;
+      importData(raw);
+      $('#transferDialog').close();
       toast('已匯入資料');
-    } catch (err) {
-      toast(err.message === 'count' ? `匯入失敗：人數需介於 ${MIN_N}～${MAX_N}` : '匯入失敗：檔案格式不正確');
-    }
+    } catch (err) { importFail(err); }
   });
   $('#btnReset').addEventListener('click', () => {
     if (!confirm('確定清除所有學生、條件與座位資料，回到預設狀態？')) return;
@@ -2350,10 +2579,11 @@ bindGlobal();
 setTimeout(() => {
   const days = state.lastBackup ? (Date.now() - state.lastBackup) / 864e5 : Infinity;
   const hasData = state.prev || state.students.some((x) => !/^學生\d+$/.test(x.name));
-  if (hasData && days > 14) toast(state.lastBackup ? `已經 ${Math.floor(days)} 天沒有備份了，建議按右上角「匯出」存一份` : '提醒：資料只存在這個瀏覽器，建議按右上角「匯出」備份', 6000);
+  if (hasData && days > 14) toast(state.lastBackup ? `已經 ${Math.floor(days)} 天沒有備份了，建議按右上角「💾 備份／搬移」存一份` : '提醒：資料只存在這個瀏覽器，建議按右上角「💾 備份／搬移」備份', 6000);
 }, 800);
 bindStudentsPanel();
 bindSeatsPanel();
 bindSecret();
+bindRecords();
 ensureSeating();
 showTab(state.tab === 'seats' ? 'seats' : 'students');

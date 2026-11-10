@@ -435,3 +435,23 @@ body.big-screen.is-drawing .big-bar { display: none; }
 body.pick-mode #room .desk.draw-hidden, body.pick-mode #room .desk.empty { cursor: pointer; }
 body.pick-mode #room .desk.draw-hidden:hover, body.pick-mode #room .desk.empty:hover { box-shadow: 0 0 0 3px #f59e0b; }
 body.pick-mode .qian { opacity: .35; }
+.tf-row { display: flex; flex-wrap: wrap; gap: 8px; }
+#tfText { width: 100%; font-size: 12px; word-break: break-all; }
+#transferDialog h3.sub { margin: 6px 0 0; }
+
+/* ---------- 紀錄／方案 ---------- */
+dialog.rec-dlg { width: min(760px, 96vw); }
+.rec-dlg .dlg { max-height: 88vh; position: relative; }
+.rec-body { overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+.rec-item { display: flex; gap: 12px; align-items: center; border: 1px solid var(--line); border-radius: 10px; padding: 8px; }
+.rec-thumb { width: 180px; max-height: 130px; object-fit: contain; border: 1px solid var(--line); border-radius: 6px; cursor: zoom-in; background: #fff; flex: none; }
+.rec-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.rec-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.rec-save { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.rec-save input[type=text] { flex: 1; min-width: 160px; }
+.rec-save label { font-size: 13px; display: inline-flex; gap: 4px; align-items: center; }
+.rec-zoom { position: absolute; inset: 0; background: rgba(255,255,255,.97); display: flex; align-items: center; justify-content: center; padding: 12px; cursor: zoom-out; border-radius: 12px; }
+.rec-zoom[hidden] { display: none; }
+.rec-zoom img { max-width: 100%; max-height: 100%; object-fit: contain; }
+@media (max-width: 560px) { .rec-item { flex-direction: column; align-items: stretch; } .rec-thumb { width: 100%; } }
+body.big-screen #btnRecords { display: none; }
