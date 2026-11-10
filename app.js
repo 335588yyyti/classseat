@@ -1266,6 +1266,19 @@ function renderRoom() {
     const v = toView(seat.x, seat.y, b, pad);
     const st = studentById(state.assign[seat.id]);
     const cls = ['desk'];
+    const clean = isClean();
+    if (ui.drawing && st && !ui.drawing.done.has(st.id)) {
+      // 還沒抽到：先藏起來
+      html += `<div class="desk draw-hidden" data-seat="${seat.id}" style="left:${v.x}px;top:${v.y}px"><span class="d-name">？</span></div>`;
+      continue;
+    }
+    if (clean) {
+      if (!st) cls.push('empty'); else if (st.gender) cls.push('g-' + st.gender);
+      if (ui.drawing && st && ui.drawing.last === st.id) cls.push('draw-pop', 'draw-just');
+      const inner = st ? `<span class="d-no">${esc(st.no)}</span><span class="d-name">${esc(st.name)}</span>` : '<span class="d-empty">空位</span>';
+      html += `<div class="${cls.join(' ')}" data-seat="${seat.id}" style="left:${v.x}px;top:${v.y}px">${inner}</div>`;
+      continue;
+    }
     if (seat.id === ui.selSeat) cls.push('selected');
     if (!st) cls.push('empty');
     else {
@@ -1352,9 +1365,8 @@ function renderSecret() {
     <div class="sec-block first">
       <div class="sec-title">🎰 抽籤設定</div>
       <div class="sec-row"><span>怎麼抽</span>${optRow('mode', [['cond', '依條件'], ['random', '完全隨機']])}</div>
-      <div class="sec-row"><span>揭曉順序</span>${optRow('order', [['front', '從前排開始'], ['random', '隨機順序']])}</div>
-      <div class="sec-row"><span>速度</span>${optRow('speed', [['fast', '快'], ['mid', '普通'], ['slow', '慢']])}</div>
-      <p class="hint">「依條件」會遵守不可相鄰、身高、視力等設定；「完全隨機」只遵守下面的安排。按工具列的「抽籤」就直接開始。</p>
+      <div class="sec-row"><span>搖籤時間</span>${optRow('speed', [['fast', '短'], ['mid', '普通'], ['slow', '長']])}</div>
+      <p class="hint">「依條件」會遵守不可相鄰、身高、視力等設定；「完全隨機」只遵守下面的安排。按「抽籤」後，學生選自己的座號、搖籤筒，就會抽到照這些設定安排好的座位。</p>
     </div>
     ${status}
     ${seatHtml}
@@ -1424,94 +1436,106 @@ function bindSecret() {
   });
 }
 
-/* ---------- 抽籤動畫 ---------- */
-const DRAW_DELAY = { fast: 150, mid: 450, slow: 1000 };
+/* ---------- 抽籤（學生一個一個上台搖籤筒） ---------- */
+const SHAKE_MS = { fast: 700, mid: 1500, slow: 2600 };
+const isClean = () => document.body.classList.contains('big-screen') || !!ui.drawing;
 
-async function runDraw({ useConditions, speed, order }) {
+function startDraw() {
   if (ui.drawing) return;
-  ui.secretMode = false; // 抽籤時一定藏起暗中安排
+  ui.secretMode = false; // 抽籤時一定藏起老師的安排
+  ui.selSeat = null; ui.selected = null;
   pushHistory();
-  optimize(useConditions);
+  // 結果先依老師的設定排好、藏起來，學生抽到時才揭曉
+  optimize(state.drawOpts.mode !== 'random');
   save();
-  renderSeatsPanel();
-
   const locked = new Set(state.locked);
-  const targets = seatOrder(state.seats).filter((s) => state.assign[s.id] && !locked.has(state.assign[s.id]));
-  if (!targets.length) { toast('沒有可以抽籤的學生（全部都鎖定了）'); return; }
-  if (order === 'random') {
-    for (let i = targets.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [targets[i], targets[j]] = [targets[j], targets[i]]; }
-  }
-  const names = targets.map((s) => studentById(state.assign[s.id])?.name || '');
-  const delay = DRAW_DELAY[speed] || DRAW_DELAY.mid;
-  const run = (ui.drawing = { skip: false });
-  const wait = (ms) => new Promise((r) => setTimeout(r, run.skip ? 0 : ms));
-  const pick = () => names[(Math.random() * names.length) | 0];
-
-  // 先把結果藏起來，記下每張桌子揭曉後的樣子
-  const desks = targets.map((s) => {
-    const el = $(`#room .desk[data-seat="${s.id}"]`);
-    const saved = { el, cls: el.className, html: el.innerHTML };
-    el.className = 'desk draw-hidden';
-    el.innerHTML = '<span class="d-name">？</span>';
-    return saved;
-  });
+  ui.drawing = { done: new Set(state.students.filter((x) => locked.has(x.id)).map((x) => x.id)), current: null, last: null, busy: false };
   document.body.classList.add('is-drawing');
-  const banner = $('#drawBanner');
-  const tube = $('#drawTube'), stick = $('#drawStick');
-  banner.hidden = false;
-  const setLabel = (t) => { $('#drawLabel').textContent = t; };
-  const shake = (on) => tube.classList.toggle('shake', on);
-  const showStick = (no, name) => {
-    // 直書：一個字一行（長名字自動縮小）
-    const chars = [...name];
-    const el = $('#drawName');
-    el.innerHTML = chars.map((ch) => `<span>${esc(ch)}</span>`).join('');
-    el.style.fontSize = (chars.length <= 4 ? 22 : chars.length <= 6 ? 16 : 11) + 'px';
-    $('#drawNo').textContent = no;
-    stick.classList.remove('rise');
-    void stick.offsetWidth; // 重新觸發動畫
-    stick.classList.add('rise');
-  };
-  stick.classList.remove('rise');
-
-  // 搖籤筒：名字在座位上快速跳動
-  setLabel('搖一搖籤筒…');
-  shake(true);
-  const t0 = performance.now();
-  while (!run.skip && performance.now() - t0 < 1400) {
-    desks.forEach((d) => { d.el.querySelector('.d-name').textContent = pick(); });
-    await wait(70);
-  }
-  desks.forEach((d) => { d.el.querySelector('.d-name').textContent = '？'; });
-
-  // 一支一支抽出來
-  for (let i = 0; i < desks.length; i++) {
-    const d = desks[i];
-    if (!run.skip) {
-      d.el.classList.add('draw-next');
-      setLabel(`抽第 ${i + 1} 支籤（共 ${desks.length} 支）`);
-      stick.classList.remove('rise');
-      shake(true);
-      await wait(delay * 0.6);
-      shake(false);
-      showStick(`第${i + 1}籤`, names[i]);
-    }
-    d.el.className = d.cls + (run.skip ? '' : ' draw-pop');
-    d.el.innerHTML = d.html;
-    await wait(delay * 0.4 + (run.skip ? 0 : Math.min(250, delay * 0.5)));
-  }
-  shake(false);
-
-  setLabel('抽籤完成 🎉');
-  if (!run.skip) showStick('完', `共${desks.length}位`);
-  await wait(1200);
-  banner.hidden = true;
-  stick.classList.remove('rise');
-  document.body.classList.remove('is-drawing');
-  ui.drawing = null;
+  $('#drawBanner').hidden = false;
+  $('#drawStick').classList.remove('rise');
+  setDrawLabel('請選擇座號');
   renderSeatsPanel();
-  const errs = evaluate().items.filter((x) => x.level === 'err').length;
-  toast(useConditions && errs ? `抽籤完成，但有 ${errs} 項規則無法同時滿足` : '抽籤完成 🎉');
+  renderDrawPad();
+}
+
+function setDrawLabel(t) { $('#drawLabel').textContent = t; }
+
+function renderDrawPad() {
+  const d = ui.drawing;
+  if (!d) return;
+  $('#drawPad').innerHTML = sortedStudents().map((st) => {
+    const done = d.done.has(st.id);
+    return `<button class="pad-no ${done ? 'done' : ''} ${d.current === st.id ? 'sel' : ''}" data-draw-no="${st.id}" ${done || d.busy ? 'disabled' : ''}>
+      <b>${esc(st.no)}</b><small>${esc(st.name)}</small></button>`;
+  }).join('');
+  const left = state.students.filter((x) => !d.done.has(x.id)).length;
+  const shakeBtn = $('#drawShake');
+  shakeBtn.disabled = d.busy || !d.current;
+  shakeBtn.textContent = d.busy ? '搖籤中…' : d.current ? `🙏 ${studentById(d.current)?.no} 號，搖籤筒！` : '先選座號';
+  $('#drawLeft').textContent = left ? `還有 ${left} 人` : '全部抽完 🎉';
+}
+
+async function drawShake() {
+  const d = ui.drawing;
+  if (!d || d.busy || !d.current) return;
+  const st = studentById(d.current);
+  d.busy = true;
+  renderDrawPad();
+  setDrawLabel(`${st.no} 號 ${st.name} 搖籤中…`);
+  const stick = $('#drawStick');
+  stick.classList.remove('rise');
+  $('#drawTube').classList.add('shake');
+  await new Promise((r) => setTimeout(r, SHAKE_MS[state.drawOpts.speed] || SHAKE_MS.mid));
+  $('#drawTube').classList.remove('shake');
+  // 跳出寫著名字的籤（直書：一個字一行）
+  const chars = [...st.name];
+  $('#drawName').innerHTML = chars.map((ch) => `<span>${esc(ch)}</span>`).join('');
+  $('#drawName').style.fontSize = (chars.length <= 4 ? 22 : chars.length <= 6 ? 16 : 11) + 'px';
+  $('#drawNo').textContent = `${st.no}號`;
+  void stick.offsetWidth;
+  stick.classList.add('rise');
+  d.done.add(st.id);
+  d.last = st.id;
+  d.current = null;
+  d.busy = false;
+  renderRoom();
+  setDrawLabel(`${st.name}，請看亮起來的座位！`);
+  renderDrawPad();
+}
+
+function revealAll() {
+  const d = ui.drawing;
+  if (!d) return;
+  state.students.forEach((x) => d.done.add(x.id));
+  d.current = null; d.last = null;
+  renderRoom();
+  renderDrawPad();
+  setDrawLabel('全部揭曉');
+}
+
+function endDraw() {
+  if (!ui.drawing) return;
+  const left = state.students.filter((x) => !ui.drawing.done.has(x.id)).length;
+  if (left && !confirm(`還有 ${left} 人沒抽，結束後會直接顯示全部座位。確定結束？`)) return;
+  ui.drawing = null;
+  $('#drawBanner').hidden = true;
+  document.body.classList.remove('is-drawing');
+  renderSeatsPanel();
+  toast('抽籤結束');
+}
+
+/* ---------- 大屏模式（投影給學生看） ---------- */
+function setBigScreen(on) {
+  document.body.classList.toggle('big-screen', on);
+  $('#bigBar').hidden = !on;
+  if (on) {
+    ui.secretMode = false; ui.selSeat = null; ui.selected = null;
+    if (state.tab !== 'seats') showTab('seats');
+    try { document.documentElement.requestFullscreen?.().catch(() => {}); } catch { /* 不支援全螢幕 */ }
+  } else if (document.fullscreenElement) {
+    document.exitFullscreen?.().catch(() => {});
+  }
+  renderSeatsPanel();
 }
 
 /** 名字字體依桌子寬度自動放大／縮小 */
@@ -1604,7 +1628,13 @@ function fitRoom() {
   const wrap = $('#roomWrap'), room = $('#room');
   const W = parseFloat(room.style.width), H = parseFloat(room.style.height);
   const avail = wrap.clientWidth || W;
-  ui.scale = Math.min(1, avail / W);
+  if (isClean()) {
+    // 大屏／抽籤：放大到填滿螢幕
+    const availH = window.innerHeight - wrap.getBoundingClientRect().top - 16;
+    ui.scale = Math.max(0.3, Math.min(2.2, avail / W, availH > 200 ? availH / H : avail / W));
+  } else {
+    ui.scale = Math.min(1, avail / W);
+  }
   room.style.transform = `scale(${ui.scale})`;
   wrap.style.height = H * ui.scale + 'px';
 }
@@ -1693,14 +1723,23 @@ function bindSeatsPanel() {
     toast(`已切換為${LAYOUT_LABEL[t]}，可按「依條件自動排座」重新安排`);
   });
   $('#mapDialog').addEventListener('close', () => { if ($('#mapDialog').returnValue === 'ok') createMap(); });
-  // 按「抽籤」直接開始，設定在「說明」面板裡
-  $('#btnDraw').addEventListener('click', () => {
-    if (ui.drawing) return;
-    const o = state.drawOpts;
-    runDraw({ useConditions: o.mode !== 'random', speed: o.speed || 'mid', order: o.order || 'front' });
+  // 按「抽籤」直接進入籤筒畫面，設定在「說明」面板裡
+  $('#btnDraw').addEventListener('click', startDraw);
+  $('#bigDraw').addEventListener('click', startDraw);
+  $('#btnBig').addEventListener('click', () => setBigScreen(true));
+  $('#bigExit').addEventListener('click', () => setBigScreen(false));
+  $('#drawPad').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-draw-no]');
+    if (!b || !ui.drawing || ui.drawing.busy) return;
+    ui.drawing.current = b.dataset.drawNo;
+    const st = studentById(ui.drawing.current);
+    setDrawLabel(`${st.no} 號 ${st.name}，請搖籤筒`);
+    renderDrawPad();
   });
-  $('#drawSkip').addEventListener('click', () => { if (ui.drawing) ui.drawing.skip = true; });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && ui.drawing) ui.drawing.skip = true; });
+  $('#drawShake').addEventListener('click', drawShake);
+  $('#drawTube').addEventListener('click', drawShake);
+  $('#drawRevealAll').addEventListener('click', () => { if (confirm('直接揭曉所有還沒抽的座位？')) revealAll(); });
+  $('#drawEnd').addEventListener('click', endDraw);
   $('#layoutOpts').addEventListener('click', (e) => {
     if (e.target.closest('[data-save-custom]')) openMapDialog('copy');
   });
@@ -1802,7 +1841,7 @@ function bindSeatsPanel() {
   let drag = null;
   room.addEventListener('pointerdown', (e) => {
     const desk = e.target.closest('.desk');
-    if (!desk || e.button > 0 || e.target.closest('button')) return;
+    if (!desk || e.button > 0 || e.target.closest('button') || isClean()) return;
     const seatId = desk.dataset.seat;
     const rect = desk.getBoundingClientRect();
     drag = {

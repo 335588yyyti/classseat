@@ -101,6 +101,7 @@
         <button class="btn small" id="btnFlip"></button>
         <button class="btn small" id="btnUnlockAll">解除全部鎖定</button>
         <button class="btn small secret-btn" id="btnSecret">說明</button>
+        <button class="btn small" id="btnBig" title="投影給學生看：只顯示座位表">📺 大屏</button>
         <button class="btn small" id="btnPrint">🖨 列印</button>
       </div>
     </section>
@@ -185,7 +186,18 @@
         <div class="qian-body"><span>籤</span></div>
       </div>
     </div>
-    <button class="btn small" id="drawSkip">跳過動畫 ⏭</button>
+    <button class="btn draw-shake" id="drawShake">先選座號</button>
+    <div class="draw-left" id="drawLeft"></div>
+    <div class="draw-pad" id="drawPad"></div>
+    <div class="draw-foot">
+      <button class="btn small" id="drawRevealAll">全部揭曉</button>
+      <button class="btn small" id="drawEnd">結束抽籤</button>
+    </div>
+  </div>
+
+  <div class="big-bar" id="bigBar" hidden>
+    <button class="btn draw-btn" id="bigDraw">🎰 抽籤</button>
+    <button class="btn small" id="bigExit">離開大屏</button>
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>

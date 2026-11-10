@@ -316,11 +316,22 @@ dialog::backdrop { background: rgba(0,0,0,.35); }
 .draw-btn { border-color: #e0b24a; background: #fff8e6; }
 .draw-btn:hover { background: #fdefc8; }
 .draw-speeds { display: flex; flex-wrap: wrap; gap: 6px 16px; }
-body.is-drawing .toolbar-card, body.is-drawing .side, body.is-drawing .tabs, body.is-drawing #room { pointer-events: none; }
-body.is-drawing .toolbar-card { opacity: .5; }
+/* 抽籤中／大屏：只留座位表，老師端的東西都藏起來 */
+body.is-drawing .toolbar-card, body.is-drawing .side, body.is-drawing .tabs, body.is-drawing .top-actions, body.is-drawing .room-hint,
+body.big-screen .toolbar-card, body.big-screen .side, body.big-screen .tabs, body.big-screen .top-actions, body.big-screen .room-hint { display: none !important; }
+body.is-drawing .seat-layout, body.big-screen .seat-layout { display: block; }
+body.is-drawing .panel, body.big-screen .panel { max-width: none; padding-top: 8px; }
+body.is-drawing .panel { padding-right: 356px; }
+body.is-drawing .print-title, body.big-screen .print-title { display: block; text-align: center; margin: 4px 0 6px; font-size: 22px; }
+body.is-drawing .class-name, body.big-screen .class-name { pointer-events: none; }
+body.big-screen.is-drawing .big-bar { display: none; }
+.big-bar { position: fixed; top: 10px; right: 14px; z-index: 40; display: flex; gap: 8px; align-items: center; }
+.big-bar[hidden] { display: none; }
+.big-bar #bigExit { opacity: .45; }
+.big-bar #bigExit:hover { opacity: 1; }
+.desk.draw-just { box-shadow: 0 0 0 4px #f59e0b, 0 0 22px rgba(245, 158, 11, .75) !important; z-index: 3; }
 .desk.draw-hidden { background: linear-gradient(135deg, #fef3c7, #fde68a); border-color: #f0c64e; border-style: solid; color: #92400e; cursor: default; }
 .desk.draw-hidden .d-name { font-size: 18px !important; }
-.desk.draw-next { box-shadow: 0 0 0 4px #f59e0b, 0 0 18px rgba(245, 158, 11, .6); transform: scale(1.06); z-index: 3; }
 .desk.draw-pop { animation: drawPop .45s ease-out; z-index: 2; }
 @keyframes drawPop {
   0% { transform: scale(.6); box-shadow: 0 0 0 6px #f59e0b; }
@@ -328,17 +339,16 @@ body.is-drawing .toolbar-card { opacity: .5; }
   100% { transform: scale(1); box-shadow: none; }
 }
 .draw-stage {
-  position: fixed; right: 24px; bottom: 24px; z-index: 150; width: 230px; padding: 14px 16px 14px;
-  border-radius: 18px; background: #2b1d16; color: #fff; text-align: center;
-  box-shadow: 0 16px 40px rgba(0,0,0,.4); display: flex; flex-direction: column; align-items: center; gap: 6px;
+  position: fixed; right: 0; top: 0; bottom: 0; z-index: 150; width: 340px; padding: 14px 14px 12px;
+  background: #2b1d16; color: #fff; text-align: center; box-shadow: -8px 0 30px rgba(0,0,0,.3);
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
 }
 .draw-stage[hidden] { display: none; }
-.draw-label { font-size: 13px; color: #fcd34d; letter-spacing: .08em; min-height: 18px; }
-.qian { position: relative; width: 150px; height: 360px; }
-/* 籤筒 */
-.qian-tube { position: absolute; left: 25px; bottom: 0; width: 100px; height: 190px; transform-origin: 50% 100%; z-index: 2; }
-.qian-tube.shake { animation: qianShake .16s ease-in-out infinite alternate; }
-@keyframes qianShake { from { transform: rotate(-9deg) translateX(-3px); } to { transform: rotate(9deg) translateX(3px); } }
+.draw-label { font-size: 15px; color: #fcd34d; letter-spacing: .04em; min-height: 22px; font-weight: 600; }
+.qian { position: relative; width: 150px; height: 300px; flex: none; }
+.qian-tube { position: absolute; left: 25px; bottom: 0; width: 100px; height: 170px; transform-origin: 50% 100%; z-index: 2; cursor: pointer; }
+.qian-tube.shake { animation: qianShake .14s ease-in-out infinite alternate; }
+@keyframes qianShake { from { transform: rotate(-10deg) translateX(-4px); } to { transform: rotate(10deg) translateX(4px); } }
 .qian-sticks { position: absolute; left: 10px; right: 10px; top: -40px; height: 70px; display: flex; justify-content: space-around; align-items: flex-end; }
 .qian-sticks i { display: block; width: 8px; height: var(--h); border-radius: 3px 3px 0 0; transform: rotate(var(--r)); transform-origin: 50% 100%;
   background: linear-gradient(90deg, #d9b56c, #f3dc9e 45%, #c9a050); box-shadow: inset 0 3px 0 #b91c1c; }
@@ -348,20 +358,30 @@ body.is-drawing .toolbar-card { opacity: .5; }
   box-shadow: inset 0 -10px 18px rgba(0,0,0,.25); }
 .qian-body span { width: 52px; height: 52px; border-radius: 50%; background: #f6d36b; color: #7f1d1d; font-size: 30px; font-weight: 900;
   display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 3px #b91c1c, 0 0 0 5px #f6d36b; }
-/* 跳出來的籤 */
-.qian-out { position: absolute; left: 50%; bottom: 120px; width: 42px; height: 200px; margin-left: -21px; z-index: 1;
+.qian-out { position: absolute; left: 50%; bottom: 100px; width: 42px; height: 190px; margin-left: -21px; z-index: 1;
   border-radius: 6px 6px 3px 3px; background: linear-gradient(90deg, #d9b56c, #f8e7b5 45%, #d2a95a);
   border-top: 8px solid #b91c1c; color: #5b1a0e; display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 6px;
-  opacity: 0; transform: translateY(90px); pointer-events: none; }
+  opacity: 0; transform: translateY(120px); pointer-events: none; }
 .qian-out.rise { animation: qianRise .5s cubic-bezier(.2,1.4,.4,1) forwards; }
-@keyframes qianRise { 0% { opacity: 1; transform: translateY(120px) rotate(0); } 100% { opacity: 1; transform: translateY(-30px) rotate(-4deg); } }
+@keyframes qianRise { 0% { opacity: 1; transform: translateY(120px) rotate(0); } 100% { opacity: 1; transform: translateY(-20px) rotate(-4deg); } }
 .qian-no { flex: none; order: 2; font-size: 11px; writing-mode: vertical-rl; color: #b91c1c; font-weight: 700; }
 .qian-name { flex: none; order: 1; display: flex; flex-direction: column; align-items: center; line-height: 1.08; font-weight: 900; text-shadow: 0 1px 0 rgba(255,255,255,.5); max-height: 112px; overflow: hidden; }
 .draw-stage .btn { background: transparent; color: #e5e7eb; border-color: #6b4f3f; }
+.draw-stage .btn:hover:not(:disabled) { background: #3d2a20; }
+.draw-stage .draw-shake { width: 100%; padding: 10px; font-size: 18px; font-weight: 800; background: #c0392b; border-color: #e8b84a; color: #fff; }
+.draw-stage .draw-shake:hover:not(:disabled) { background: #d6453a; }
+.draw-stage .draw-shake:disabled { background: #4a3328; border-color: #6b4f3f; color: #b8a79c; opacity: 1; }
+.draw-left { font-size: 12.5px; color: #d6c3b5; }
+.draw-pad { flex: 1; min-height: 0; overflow: auto; width: 100%; display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; align-content: start; padding: 2px; }
+.pad-no { border: 1.5px solid #6b4f3f; background: #3d2a20; color: #fff; border-radius: 10px; padding: 5px 2px 4px; cursor: pointer; display: flex; flex-direction: column; align-items: center; line-height: 1.1; }
+.pad-no b { font-size: 18px; }
+.pad-no small { font-size: 10px; color: #d6c3b5; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.pad-no:hover:not(:disabled) { border-color: #fcd34d; }
+.pad-no.sel { background: #f6d36b; border-color: #f6d36b; color: #7f1d1d; }
+.pad-no.sel small { color: #7f1d1d; }
+.pad-no.done { opacity: .28; cursor: default; text-decoration: line-through; }
+.draw-foot { display: flex; gap: 8px; justify-content: center; }
 .draw-stage .btn:hover { background: #3d2a20; }
-@media (max-width: 640px) {
-  .draw-stage { right: 50%; transform: translateX(50%) scale(.85); transform-origin: 50% 100%; bottom: 10px; }
-}
 @media print { .draw-stage { display: none !important; } }
 
 /* ---------- 老師暗中安排 ---------- */
@@ -397,3 +417,9 @@ body.is-drawing .toolbar-card { opacity: .5; }
 .sec-opts { display: flex; flex-wrap: wrap; gap: 4px; }
 .sec-opts button { border: 1.5px solid #d9cff8; background: #fff; border-radius: 8px; padding: 4px 10px; font-size: 13px; cursor: pointer; color: #4c1d95; }
 .sec-opts button.on { background: #7c3aed; border-color: #7c3aed; color: #fff; font-weight: 600; }
+@media (max-width: 760px) {
+  .draw-stage { width: 100%; left: 0; right: 0; top: auto; bottom: 0; height: 64vh; border-radius: 16px 16px 0 0; gap: 6px; }
+  .draw-pad { grid-template-columns: repeat(6, 1fr); }
+  body.is-drawing .panel { padding-right: 16px; padding-bottom: 64vh; }
+  .qian { transform: scale(.7); transform-origin: 50% 0; height: 210px; margin-bottom: -10px; }
+}
