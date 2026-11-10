@@ -72,6 +72,8 @@ function defaultState() {
     maps: [{ id: 'class', name: '本班', seats: CLASS_LAYOUT.map((p) => ({ ...p })) }],
     // 老師暗中安排：fixed 座位→一定抽到的學生；ban 座位→一定不會抽到的學生；apart 不能坐隔壁的兩人
     secret: { fixed: {}, ban: {}, apart: [] },
+    // 抽籤設定（在「說明」面板裡調整）
+    drawOpts: { mode: 'cond', order: 'front', speed: 'mid' },
     seats: [],
     assign: {}, // seatId -> studentId
     locked: [], // studentIds
@@ -117,6 +119,7 @@ function normalize(data) {
     if (s.maps.length) s.layout.mapId = s.maps[0].id; else s.layout.type = 'rows';
   }
   s.secret = { fixed: {}, ban: {}, apart: [], ...(data.secret || {}) };
+  s.drawOpts = { ...d.drawOpts, ...(data.drawOpts || {}) };
   delete s.customLayout;
   delete s.freeLayout;
   s.assign = data.assign && typeof data.assign === 'object' ? data.assign : {};
@@ -1341,8 +1344,18 @@ function renderSecret() {
   const status = ui.secretStatus === undefined ? ''
     : ui.secretStatus ? `<p class="sec-status warn">⚠ 上次排座有 ${ui.secretStatus} 項安排無法同時做到</p>`
       : '<p class="sec-status ok">✓ 上次排座全部照安排</p>';
+  const o = state.drawOpts;
+  const optRow = (key, opts) => `<div class="sec-opts">${opts.map(([v, label]) =>
+    `<button class="${o[key] === v ? 'on' : ''}" data-draw-opt="${key}" data-val="${v}">${label}</button>`).join('')}</div>`;
   $('#secretBody').innerHTML = `
     <p class="hint">只有按工具列的「說明」開啟時看得到，座位表、學生名單和抽籤畫面都不會顯示。下一次 🎰 抽籤、🎲 隨機或自動排座時生效。</p>
+    <div class="sec-block first">
+      <div class="sec-title">🎰 抽籤設定</div>
+      <div class="sec-row"><span>怎麼抽</span>${optRow('mode', [['cond', '依條件'], ['random', '完全隨機']])}</div>
+      <div class="sec-row"><span>揭曉順序</span>${optRow('order', [['front', '從前排開始'], ['random', '隨機順序']])}</div>
+      <div class="sec-row"><span>速度</span>${optRow('speed', [['fast', '快'], ['mid', '普通'], ['slow', '慢']])}</div>
+      <p class="hint">「依條件」會遵守不可相鄰、身高、視力等設定；「完全隨機」只遵守下面的安排。按工具列的「抽籤」就直接開始。</p>
+    </div>
     ${status}
     ${seatHtml}
     <div class="sec-block">
@@ -1394,6 +1407,9 @@ function bindSecret() {
       const a = $('[data-sec-a]').value, b = $('[data-sec-b]').value;
       if (!a || !b || a === b) { toast('請選兩位不同的同學'); return; }
       if (!sec().apart.some(([x, y]) => (x === a && y === b) || (x === b && y === a))) sec().apart.push([a, b]);
+      done();
+    } else if (d.drawOpt) {
+      state.drawOpts[d.drawOpt] = d.val;
       done();
     } else if (d.secPick) {
       ui.selSeat = d.secPick;
@@ -1482,7 +1498,7 @@ async function runDraw({ useConditions, speed, order }) {
     }
     d.el.className = d.cls + (run.skip ? '' : ' draw-pop');
     d.el.innerHTML = d.html;
-    await wait(delay * 0.4 + (run.skip ? 0 : 250));
+    await wait(delay * 0.4 + (run.skip ? 0 : Math.min(250, delay * 0.5)));
   }
   shake(false);
 
@@ -1677,11 +1693,11 @@ function bindSeatsPanel() {
     toast(`已切換為${LAYOUT_LABEL[t]}，可按「依條件自動排座」重新安排`);
   });
   $('#mapDialog').addEventListener('close', () => { if ($('#mapDialog').returnValue === 'ok') createMap(); });
-  $('#btnDraw').addEventListener('click', () => { if (!ui.drawing) $('#drawDialog').showModal(); });
-  $('#drawDialog').addEventListener('close', () => {
-    if ($('#drawDialog').returnValue !== 'ok') return;
-    const val = (n) => $(`#drawDialog input[name="${n}"]:checked`)?.value;
-    runDraw({ useConditions: val('drawMode') === 'cond', speed: val('drawSpeed') || 'mid', order: val('drawOrder') || 'front' });
+  // 按「抽籤」直接開始，設定在「說明」面板裡
+  $('#btnDraw').addEventListener('click', () => {
+    if (ui.drawing) return;
+    const o = state.drawOpts;
+    runDraw({ useConditions: o.mode !== 'random', speed: o.speed || 'mid', order: o.order || 'front' });
   });
   $('#drawSkip').addEventListener('click', () => { if (ui.drawing) ui.drawing.skip = true; });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && ui.drawing) ui.drawing.skip = true; });

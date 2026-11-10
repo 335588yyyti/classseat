@@ -393,3 +393,7 @@ body.is-drawing .toolbar-card { opacity: .5; }
 .sec-status.ok { background: #e5f5ea; color: #14532d; }
 .sec-status.warn { background: var(--warn-soft); color: #713f12; }
 @media print { .secret-card, .desk .d-sec, .desk .d-seatno { display: none !important; } .desk.sec-fixed, .desk.sec-ban { outline: none; } }
+.sec-block.first { border-top: 0; margin-top: 0; padding-top: 0; }
+.sec-opts { display: flex; flex-wrap: wrap; gap: 4px; }
+.sec-opts button { border: 1.5px solid #d9cff8; background: #fff; border-radius: 8px; padding: 4px 10px; font-size: 13px; cursor: pointer; color: #4c1d95; }
+.sec-opts button.on { background: #7c3aed; border-color: #7c3aed; color: #fff; font-weight: 600; }
