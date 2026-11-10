@@ -11,6 +11,7 @@
     <div class="brand">
       <span class="logo" aria-hidden="true">▦</span>
       <input id="className" class="class-name" placeholder="班級名稱（例：三年二班）" aria-label="班級名稱">
+      <button class="btn small cloud-btn" id="btnCloud">☁️ 雲端</button>
     </div>
     <nav class="tabs" role="tablist">
       <button class="tab" data-tab="students" role="tab">① 學生與條件</button>
@@ -234,6 +235,25 @@
       <div class="seg small" id="recTabs"><button data-rtab="hist">過去的座位</button><button data-rtab="plans">我的方案</button></div>
       <div id="recBody" class="rec-body"></div>
       <div class="rec-zoom" id="recZoom" hidden title="點一下關閉"><img id="recZoomImg" alt="座位表預覽"></div>
+    </div>
+  </dialog>
+
+  <dialog id="cloudDialog">
+    <div class="dlg">
+      <div class="rd-head"><h2>☁️ 雲端班級</h2><button class="btn" id="cloudClose">關閉</button></div>
+      <div id="cloudBody" class="cloud-body"></div>
+      <p class="cloud-msg" id="cloudMsg" role="status"></p>
+    </div>
+  </dialog>
+
+  <dialog id="conflictDialog">
+    <div class="dlg">
+      <h2>⚠ 雲端資料比較新</h2>
+      <p id="conflictText"></p>
+      <div class="dlg-actions">
+        <button class="btn" id="conflictLocal">用這台的資料覆蓋雲端</button>
+        <button class="btn primary" id="conflictCloud">用雲端的資料</button>
+      </div>
     </div>
   </dialog>
 
