@@ -486,3 +486,4 @@ body.kiosk .class-name::placeholder { color: transparent; }
 .kiosk-box { max-width: 520px; }
 .kiosk-icon { font-size: 64px; }
 .kiosk-cover p { font-size: 20px; line-height: 1.6; }
+body.no-cloud .cloud-btn { display: none !important; }

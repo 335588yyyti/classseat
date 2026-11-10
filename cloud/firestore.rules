@@ -1,0 +1,37 @@
+rules_version = '2';
+
+// 教室座位安排（classseat）的 Firestore 安全規則
+// 只管 classseat_ 開頭的兩個集合；如果同一個 Firebase 專案還有其他系統（例如作業系統），
+// 請把下面兩個 match 區塊「加進」原本的規則裡，不要整份取代。
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 每個班級一份文件：文件代碼＝班級代碼（小寫），登入帳號＝班級代碼@classseat.local
+    match /classseat_classes/{code} {
+      allow get, update, delete: if request.auth != null
+        && request.auth.token.email == code + '@classseat.local'
+        && resource.data.owner == request.auth.uid;
+      allow create: if request.auth != null
+        && request.auth.token.email == code + '@classseat.local'
+        && request.resource.data.owner == request.auth.uid;
+      allow list: if false;   // 不能列出所有班級
+    }
+
+    // 抽籤專用連結：文件代碼就是連結裡的亂數代碼（48 個字），知道連結才讀得到
+    match /classseat_draws/{drawId} {
+      // 學校大屏：連結還沒過期就能讀取、存回抽籤結果（只能改這三個欄位）
+      allow get: if resource.data.expiresAt > request.time;
+      allow update: if (request.auth != null && resource.data.owner == request.auth.uid)
+        || (resource.data.expiresAt > request.time
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['data', 'updatedAt', 'kioskAt'])
+            && request.resource.data.data is string
+            && request.resource.data.data.size() < 900000);
+      // 老師：產生、查詢、停用自己班級的連結
+      allow create: if request.auth != null
+        && request.resource.data.owner == request.auth.uid
+        && request.auth.token.email == request.resource.data.code + '@classseat.local';
+      allow list: if request.auth != null && resource.data.owner == request.auth.uid;
+      allow delete: if request.auth != null && resource.data.owner == request.auth.uid;
+    }
+  }
+}

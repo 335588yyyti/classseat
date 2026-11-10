@@ -130,10 +130,11 @@ function normalize(data) {
   return s;
 }
 
-/* ---------- 雲端（Google 試算表）：班級代碼＋老師密碼 ---------- */
-// 部署好 cloud/Code.gs 後，把網址填在這裡，每台裝置就不用再貼網址
-const DEFAULT_CLOUD_URL = '';
-const CLOUD_URL_KEY = 'classseat-cloud-url';
+/* ---------- 雲端（Firebase）：班級代碼＋老師密碼 ---------- */
+// 把 Firebase 專案的設定貼在這裡（Firebase 主控台 → 專案設定 → 你的應用程式 → SDK 設定），雲端功能就會出現
+// 例：{ apiKey: '...', authDomain: '...firebaseapp.com', projectId: '...', appId: '...' }
+const FIREBASE_CONFIG = null;
+const FB_CONFIG_KEY = 'classseat-firebase-config';
 const SESSION_KEY = 'classseat-session';
 const classKey = (code) => 'classseat-class:' + code;
 function getSession() {
@@ -147,12 +148,12 @@ function setSession(sess) {
     if (sess) (sess.remember ? localStorage : sessionStorage).setItem(SESSION_KEY, JSON.stringify(sess));
   } catch { /* 無痕模式等情況 */ }
 }
-/* 抽籤專用連結：#draw=班級代碼&t=憑證(&u=雲端網址)。打開後馬上把網址列上的憑證拿掉，只存在這個分頁 */
+/* 抽籤專用連結：#draw=班級代碼&t=連結代碼。打開後馬上把網址列上的連結代碼拿掉，只存在這個分頁 */
 const KIOSK_KEY = 'classseat-kiosk';
 function readKiosk() {
-  const m = location.hash.match(/^#draw=([^&]+)&t=([^&]+)(?:&u=([^&]+))?/);
+  const m = location.hash.match(/^#draw=([^&]+)&t=([^&]+)/);
   if (m) {
-    const k = { kiosk: true, code: decodeURIComponent(m[1]), token: m[2], url: m[3] ? decodeURIComponent(m[3]) : '', updatedAt: 0, syncedHash: '' };
+    const k = { kiosk: true, code: decodeURIComponent(m[1]), token: m[2], updatedAt: 0, syncedHash: '' };
     try { sessionStorage.setItem(KIOSK_KEY, JSON.stringify(k)); } catch { /* ignore */ }
     history.replaceState(null, '', location.pathname + location.search);
     return k;
@@ -160,6 +161,8 @@ function readKiosk() {
   try { return JSON.parse(sessionStorage.getItem(KIOSK_KEY) || 'null'); } catch { return null; }
 }
 const KIOSK = readKiosk();
+// 已經開著網頁時又點了抽籤連結：重新載入成抽籤模式
+window.addEventListener('hashchange', () => { if (/^#draw=/.test(location.hash)) location.reload(); });
 const cloud = { session: KIOSK || getSession(), status: 'idle', busy: false, pending: false, timer: null };
 const storeKey = () => (cloud.session ? (cloud.session.kiosk ? 'classseat-kiosk-data:' : 'classseat-class:') + cloud.session.code : STORE_KEY);
 // 抽籤專用模式的資料只放在這個分頁（關掉就沒了），不會留在學校的電腦上
@@ -1871,28 +1874,174 @@ function exportData() {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
-/* ---------- 雲端同步 ---------- */
-const cloudUrl = () => (cloud.session?.kiosk && cloud.session.url) || (localStorage.getItem(CLOUD_URL_KEY) || DEFAULT_CLOUD_URL || '').trim();
+/* ---------- 雲端同步（Firebase Auth＋Firestore） ---------- */
+const FB_VERSION = '10.12.2';
+const FB_CLASSES = 'classseat_classes';   // 每個班級一份文件
+const FB_DRAWS = 'classseat_draws';       // 抽籤專用連結（文件代碼就是連結代碼）
+const fbConfig = () => { try { return JSON.parse(localStorage.getItem(FB_CONFIG_KEY) || 'null') || FIREBASE_CONFIG; } catch { return FIREBASE_CONFIG; } };
+const cloudEnabled = () => !!fbConfig()?.apiKey || !!cloud.session?.kiosk;
+const classEmail = (code) => `${code.toLowerCase()}@classseat.local`;
+const CODE_RE = /^[A-Za-z0-9_-]{2,20}$/;
 const CLOUD_ERR = {
-  code: '班級代碼要 2～20 個字，不能有空白', key: '密碼格式不正確', exists: '這個班級代碼已經有人用了，請換一個',
-  notfound: '找不到這個班級代碼', wrongpass: '老師密碼不對', locked: '密碼錯太多次，新的登入要等 10 分鐘後再試',
+  code: '班級代碼要 2～20 個英文字母、數字、- 或 _（例如 302、class-3b）', key: '老師密碼至少 6 個字', exists: '這個班級代碼已經有人用了，請換一個',
+  notfound: '找不到這個班級代碼', wrongpass: '老師密碼不對', invalid: '班級代碼或老師密碼不對', locked: '嘗試太多次了，請過幾分鐘再試',
   session: '這台裝置的登入已失效（可能在別台改了密碼），請重新登入',
   kiosk: '這個抽籤連結已經失效或過期了，請老師重新產生一個',
-  toolarge: '資料太大，無法存到雲端', server: '雲端程式發生錯誤', action: '雲端程式版本不對，請重新部署 Code.gs',
+  toolarge: '資料太大，無法存到雲端', server: '雲端發生錯誤', action: '雲端設定不正確', offline: '連不上雲端，請檢查網路',
 };
-const cloudErrText = (r) => (CLOUD_ERR[r.error] || '連線失敗') + (r.error === 'wrongpass' && r.left !== undefined ? `（再錯 ${r.left} 次會鎖 10 分鐘）` : '');
+const cloudErrText = (r) => CLOUD_ERR[r.error] || '連線失敗';
 
-async function makeKey(code, pass) {
-  if (!window.crypto?.subtle) throw new Error('需要用 https 網址打開網頁才能登入雲端');
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`classseat|${code}|${pass}`));
-  return [...new Uint8Array(buf)].map((x) => x.toString(16).padStart(2, '0')).join('');
+let fb = null;
+function loadScript(src) {
+  return new Promise((res, rej) => { const el = document.createElement('script'); el.src = src; el.onload = res; el.onerror = rej; document.head.appendChild(el); });
+}
+/** 需要時才載入 Firebase（沒用雲端的老師不會載入任何東西） */
+async function fbInit() {
+  if (fb) return fb;
+  const cfg = fbConfig();
+  if (!cfg?.apiKey) throw new Error('雲端還沒設定');
+  if (!window.firebase?.firestore) {
+    for (const m of ['app', 'auth', 'firestore']) await loadScript(`https://www.gstatic.com/firebasejs/${FB_VERSION}/firebase-${m}-compat.js`);
+  }
+  const app = firebase.apps.find((x) => x.name === 'classseat') || firebase.initializeApp(cfg, 'classseat');
+  const auth = app.auth(), db = app.firestore();
+  if (localStorage.getItem('classseat-fb-emulator')) { auth.useEmulator('http://127.0.0.1:9099'); db.useEmulator('127.0.0.1', 8080); }
+  // 等 Firebase 從瀏覽器讀回登入狀態
+  await new Promise((res) => { const off = auth.onAuthStateChanged(() => { off(); res(); }); });
+  fb = { app, auth, db, FieldValue: firebase.firestore.FieldValue, Timestamp: firebase.firestore.Timestamp, Persistence: firebase.auth.Auth.Persistence };
+  return fb;
+}
+const fbErr = (e) => {
+  const c = e?.code || '';
+  if (/email-already-in-use/.test(c)) return 'exists';
+  if (/user-not-found/.test(c)) return 'notfound';
+  if (/wrong-password/.test(c)) return 'wrongpass';
+  if (/invalid-credential|invalid-login|invalid-email/.test(c)) return 'invalid';
+  if (/too-many-requests/.test(c)) return 'locked';
+  if (/weak-password/.test(c)) return 'key';
+  if (/permission-denied|not-found/.test(c)) return 'session';
+  if (/unavailable|network/.test(c)) return 'offline';
+  return 'server';
+};
+const randomId = () => [...crypto.getRandomValues(new Uint8Array(24))].map((x) => x.toString(16).padStart(2, '0')).join('');
+
+/**
+ * 與雲端溝通（介面和原本一樣：回傳 { ok, ... } 或 { ok:false, error }）
+ * 老師：Firebase 帳號（班級代碼@classseat.local）；抽籤連結：classseat_draws/{連結代碼}
+ */
+async function cloudCall(action, p = {}) {
+  try {
+    const { auth, db, FieldValue, Timestamp, Persistence } = await fbInit();
+    const code = String(p.code || '').toLowerCase();
+    const classRef = db.collection(FB_CLASSES).doc(code);
+    const me = auth.currentUser;
+    const isMe = () => me && me.email === classEmail(code);
+
+    // ---- 抽籤連結（不需要登入）
+    if (p.token && p.token !== 'fb') {
+      const ref = db.collection(FB_DRAWS).doc(p.token);
+      if (action === 'load') {
+        const d = await ref.get();
+        if (!d.exists || d.data().code !== code || d.data().expiresAt.toMillis() < Date.now()) return { ok: false, error: 'session' };
+        return { ok: true, role: 'draw', data: d.data().data, updatedAt: d.data().updatedAt, name: d.data().name || '' };
+      }
+      if (action === 'save') {
+        const now = Date.now();
+        await ref.update({ data: p.data, updatedAt: now, kioskAt: now });
+        return { ok: true, updatedAt: now };
+      }
+      return { ok: false, error: 'action' };
+    }
+
+    if (action === 'create' || action === 'login') {
+      await auth.setPersistence(p.remember ? Persistence.LOCAL : Persistence.SESSION);
+      if (action === 'create') {
+        const cred = await auth.createUserWithEmailAndPassword(classEmail(code), p.pass);
+        const now = Date.now();
+        await classRef.set({ owner: cred.user.uid, name: p.name || '', data: p.data, updatedAt: now, passwdAt: 0 });
+        return { ok: true, token: 'fb', updatedAt: now };
+      }
+      await auth.signInWithEmailAndPassword(classEmail(code), p.pass);
+      const r = await loadClass(classRef, code);
+      return { ...r, token: 'fb' };
+    }
+
+    if (!isMe()) return { ok: false, error: 'session' };
+    if (action === 'load') {
+      const r = await loadClass(classRef, code);
+      if (r.ok && r.passwdAt > (p.loginAt || 0)) { await auth.signOut(); return { ok: false, error: 'session' }; }
+      return r;
+    }
+    if (action === 'save') {
+      const res = await db.runTransaction(async (tx) => {
+        const d = await tx.get(classRef);
+        const cur = d.exists ? d.data().updatedAt || 0 : 0;
+        if (!p.force && p.base && cur > p.base) return { ok: false, error: 'conflict', updatedAt: cur };
+        const t = Math.max(Date.now(), cur + 1);
+        tx.set(classRef, { owner: me.uid, name: p.name || '', data: p.data, updatedAt: t }, { merge: true });
+        return { ok: true, updatedAt: t };
+      });
+      // 有效的抽籤連結也一起換成最新資料
+      if (res.ok) {
+        const draws = await db.collection(FB_DRAWS).where('owner', '==', me.uid).where('code', '==', code).get();
+        // 學校抽完還沒合併回來的結果不要蓋掉（下次讀取時會合併）
+        await Promise.all(draws.docs.filter((x) => x.data().expiresAt.toMillis() > Date.now() && (x.data().kioskAt || 0) <= (x.data().mergedAt || 0))
+          .map((x) => x.ref.update({ data: p.data, name: p.name || '', updatedAt: res.updatedAt })));
+      }
+      return res;
+    }
+    if (action === 'passwd') {
+      try {
+        await me.reauthenticateWithCredential(firebase.auth.EmailAuthProvider.credential(me.email, p.oldPass));
+      } catch (e) { return { ok: false, error: /too-many/.test(e.code) ? 'locked' : 'wrongpass' }; }
+      await me.updatePassword(p.newPass);
+      const now = Date.now();
+      await classRef.update({ passwdAt: now });
+      await revokeDraws(db, me.uid, code);
+      return { ok: true, loginAt: now };
+    }
+    if (action === 'logout') { await auth.signOut(); return { ok: true }; }
+    if (action === 'drawlink') {
+      const hours = Math.min(168, Math.max(1, Number(p.hours) || 24));
+      const id = randomId();
+      const d = await classRef.get();
+      const exp = Date.now() + hours * 3600e3;
+      await db.collection(FB_DRAWS).doc(id).set({
+        owner: me.uid, code, name: d.data().name || '', data: d.data().data, updatedAt: d.data().updatedAt,
+        createdAt: Date.now(), expiresAt: Timestamp.fromMillis(exp), kioskAt: 0, mergedAt: 0,
+      });
+      return { ok: true, drawToken: id, expiresAt: exp };
+    }
+    if (action === 'drawrevoke') { await revokeDraws(db, me.uid, code); return { ok: true }; }
+    return { ok: false, error: 'action' };
+  } catch (e) {
+    if (e?.message === '雲端還沒設定') throw e;
+    return { ok: false, error: fbErr(e), message: String(e?.message || e) };
+  }
 }
 
-async function cloudCall(action, payload, url = cloudUrl()) {
-  if (!url) throw new Error('還沒設定雲端網址');
-  // 用純文字送出，避免瀏覽器先送 OPTIONS（Apps Script 不支援）
-  const res = await fetch(url, { method: 'POST', body: JSON.stringify({ action, ...payload }) });
-  return res.json();
+/** 讀班級；如果學校的抽籤連結有新的抽籤結果，先合併回班級 */
+async function loadClass(classRef, code) {
+  const { auth, db } = fb;
+  const d = await classRef.get();
+  if (!d.exists) return { ok: false, error: 'notfound' };
+  let { data, updatedAt, name, passwdAt } = d.data();
+  const draws = await db.collection(FB_DRAWS).where('owner', '==', auth.currentUser.uid).where('code', '==', code).get();
+  const fresh = draws.docs.map((x) => ({ ref: x.ref, ...x.data() }))
+    .filter((x) => (x.kioskAt || 0) > (x.mergedAt || 0))
+    .sort((x, y) => y.kioskAt - x.kioskAt)[0];
+  if (fresh) {
+    const t = Math.max(Date.now(), updatedAt + 1);
+    await classRef.update({ data: fresh.data, updatedAt: t });
+    await fresh.ref.update({ mergedAt: fresh.kioskAt });
+    data = fresh.data; updatedAt = t;
+  }
+  return { ok: true, data, updatedAt, name, passwdAt: passwdAt || 0, merged: !!fresh };
+}
+
+async function revokeDraws(db, uid, code) {
+  const draws = await db.collection(FB_DRAWS).where('owner', '==', uid).where('code', '==', code).get();
+  await Promise.all(draws.docs.map((x) => x.ref.delete()));
 }
 
 function setCloudStatus(st, msg = '') {
@@ -1929,7 +2078,7 @@ async function cloudSave(force = false) {
   cloud.busy = true;
   setCloudStatus('saving');
   try {
-    const r = await cloudCall('save', { code: sess.code, token: sess.token, data: await makeDataCode(), base: sess.updatedAt, name: state.className || '', force }, sess.url);
+    const r = await cloudCall('save', { code: sess.code, token: sess.token, data: await makeDataCode(), base: sess.updatedAt, name: state.className || '', force });
     if (r.ok) {
       sess.updatedAt = r.updatedAt;
       sess.syncedHash = h;
@@ -1940,6 +2089,8 @@ async function cloudSave(force = false) {
       openConflict(r.updatedAt);
     } else if (r.error === 'session') {
       sessionExpired();
+    } else if (r.error === 'offline') {
+      setCloudStatus('offline');
     } else {
       setCloudStatus('error', cloudErrText(r));
     }
@@ -1972,13 +2123,13 @@ async function cloudPull({ quiet = false } = {}) {
   const sess = cloud.session;
   if (!sess || sess.expired || cloud.busy || ui.drawing) return;
   try {
-    const r = await cloudCall('load', { code: sess.code, token: sess.token }, sess.url);
-    if (!r.ok) { if (r.error === 'session') sessionExpired(); else setCloudStatus('error', cloudErrText(r)); return; }
+    const r = await cloudCall('load', { code: sess.code, token: sess.token, loginAt: sess.loginAt });
+    if (!r.ok) { if (r.error === 'session') sessionExpired(); else setCloudStatus(r.error === 'offline' ? 'offline' : 'error', cloudErrText(r)); return; }
     const localDirty = hashStr(JSON.stringify(state)) !== sess.syncedHash;
     if (r.updatedAt > (sess.updatedAt || 0)) {
       if (localDirty) { setCloudStatus('conflict'); openConflict(r.updatedAt, r.data); return; }
       const data = normalize(await readDataCode(r.data));
-      if (data) { applyCloudState(data, r.updatedAt); if (!quiet) toast('已從雲端更新成最新資料'); }
+      if (data) { applyCloudState(data, r.updatedAt); if (!quiet || r.merged) toast(r.merged ? '已收到學校抽籤的結果' : '已從雲端更新成最新資料', 4000); }
     } else if (localDirty) {
       cloudSave();
     } else {
@@ -2016,7 +2167,7 @@ async function resolveConflict(useCloud) {
     try {
       let { remoteData, updatedAt } = cloud.conflict || {};
       if (!remoteData) {
-        const r = await cloudCall('load', { code: sess.code, token: sess.token }, sess.url);
+        const r = await cloudCall('load', { code: sess.code, token: sess.token, loginAt: sess.loginAt });
         if (!r.ok) { toast(cloudErrText(r)); return; }
         remoteData = r.data; updatedAt = r.updatedAt;
       }
@@ -2031,7 +2182,6 @@ async function resolveConflict(useCloud) {
 
 /* ---------- 雲端視窗 ---------- */
 function renderCloudDialog() {
-  const url = cloudUrl();
   const sess = cloud.session;
   let html = '';
   if (sess && !sess.expired) {
@@ -2048,19 +2198,16 @@ function renderCloudDialog() {
       <div class="tf-row" id="clDrawOut" hidden><input type="text" id="clDrawLink" readonly><button class="btn small" data-cl="drawcopy">複製</button></div>
       <h3 class="sub">更改老師密碼</h3>
       <div class="cl-form"><input type="password" id="clOldPass" placeholder="目前的密碼" autocomplete="current-password">
-        <div class="tf-row"><input type="password" id="clNewPass" placeholder="新密碼（至少 4 個字）" autocomplete="new-password"><button class="btn" data-cl="passwd">更改</button></div></div>
-      <p class="hint">改密碼後，其他已登入的裝置都會被登出，要用新密碼重新登入。</p>
+        <div class="tf-row"><input type="password" id="clNewPass" placeholder="新密碼（至少 6 個字）" autocomplete="new-password"><button class="btn" data-cl="passwd">更改</button></div></div>
+      <p class="hint">改密碼後，其他已登入的裝置和所有抽籤連結都會失效，要用新密碼重新登入。</p>
       <h3 class="sub">切換班級／登出</h3>
       <div class="tf-row"><button class="btn" data-cl="logout">登出</button><button class="btn danger-text" data-cl="logout-clear">登出並清除這台的資料</button></div>
       <p class="hint">在學校或別人的電腦用完，建議按「登出並清除這台的資料」。資料都還在雲端。</p>`;
-  } else if (!url && !sess) {
-    html = `<p>要用「班級代碼＋老師密碼」在不同電腦登入，需要先設定一次雲端（存在你自己的 Google 試算表）。</p>
-      <p class="hint">設定步驟：<a href="https://github.com/335588yyyti/classseat/blob/main/cloud/README.md" target="_blank" rel="noopener">雲端設定教學</a>（約 5 分鐘，只要做一次）</p>`;
   } else {
     html = `${sess?.expired ? `<div class="cl-box warn">⚠ ${CLOUD_ERR.session}</div>` : ''}<p class="hint">用「班級代碼＋老師密碼」登入，資料會存在雲端，任何電腦、手機都能打開同一個班。</p>
       <div class="cl-form">
         <label>班級代碼<input type="text" id="clCode" placeholder="例如 302" autocomplete="username" maxlength="20"></label>
-        <label>老師密碼<input type="password" id="clPass" placeholder="至少 4 個字" autocomplete="current-password"></label>
+        <label>老師密碼<input type="password" id="clPass" placeholder="至少 6 個字" autocomplete="current-password"></label>
         <label class="cl-check"><input type="checkbox" id="clRemember"> 記住這台裝置（自己的電腦或手機才勾）</label>
       </div>
       <div class="tf-row"><button class="btn primary" data-cl="login">登入</button></div>
@@ -2071,12 +2218,8 @@ function renderCloudDialog() {
         <label class="cl-check"><input type="radio" name="clSrc" value="blank"> 建立空白的新班級</label>
       </div>
       <div class="tf-row"><button class="btn" data-cl="create">建立新班級</button></div>
-      <p class="hint">班級代碼由你自己決定（例如 302、3-5），之後在其他電腦用同一組代碼和密碼登入。</p>`;
+      <p class="hint">班級代碼由你自己決定（英文字母或數字，例如 302、class3b），之後在其他電腦用同一組代碼和密碼登入。</p>`;
   }
-  html += `<details class="cl-adv" ${url ? '' : 'open'}><summary>雲端網址設定</summary>
-      <div class="tf-row"><input type="text" id="clUrl" placeholder="https://script.google.com/macros/s/……/exec" value="${esc(localStorage.getItem(CLOUD_URL_KEY) || '')}">
-      <button class="btn small" data-cl="url">儲存網址</button></div>
-      <p class="hint">${DEFAULT_CLOUD_URL ? '網頁已內建雲端網址；這裡填了就會改用你填的。' : '貼上 Google Apps Script 部署後的「網頁應用程式」網址。'}</p></details>`;
   $('#cloudBody').innerHTML = html;
   $('#cloudMsg').textContent = '';
 }
@@ -2092,44 +2235,30 @@ function cloudMsg(t, bad = true) {
 async function cloudAction(act) {
   const val = (id) => ($(id)?.value || '').trim();
   try {
-    if (act === 'url') {
-      const u = val('#clUrl');
-      if (u && !/^https:\/\//.test(u)) { cloudMsg('網址要用 https:// 開頭'); return; }
-      if (u) {
-        cloudMsg('測試連線中…', false);
-        const ok = await fetch(u).then((r) => r.json()).then((j) => j.app === 'classseat').catch(() => false);
-        if (!ok) { cloudMsg('連不上這個網址，請確認部署時「誰可以存取」選「所有人」'); return; }
-        localStorage.setItem(CLOUD_URL_KEY, u);
-      } else localStorage.removeItem(CLOUD_URL_KEY);
-      renderCloudDialog();
-      cloudMsg(u ? '✓ 已儲存網址，可以登入或建立班級了' : '已清除網址', false);
-      return;
-    }
     if (act === 'login' || act === 'create') {
-      const code = val('#clCode'), pass = $('#clPass').value;
-      if (!/^\S{2,20}$/.test(code)) { cloudMsg(CLOUD_ERR.code); return; }
-      if (pass.length < 4) { cloudMsg('老師密碼至少 4 個字'); return; }
+      const code = val('#clCode').toLowerCase(), pass = $('#clPass').value;
+      if (!CODE_RE.test(code)) { cloudMsg(CLOUD_ERR.code); return; }
+      if (pass.length < 6) { cloudMsg(CLOUD_ERR.key); return; }
       if (act === 'create' && pass !== $('#clPass2').value) { cloudMsg('兩次輸入的密碼不一樣'); return; }
-      const key = await makeKey(code, pass);
       const remember = $('#clRemember').checked;
-      const url = cloudUrl();
+      const url = '';
       cloudMsg(act === 'login' ? '登入中…' : '建立中…', false);
       if (act === 'login') {
-        const r = await cloudCall('login', { code, key }, url);
+        const r = await cloudCall('login', { code, pass, remember });
         if (!r.ok) { cloudMsg(cloudErrText(r)); return; }
         const data = normalize(await readDataCode(r.data));
         if (!data) { cloudMsg('雲端資料格式不正確'); return; }
         // 重新登入同一個班、而這台還有沒上傳的修改：先問要用哪一份
         const old = cloud.session;
         if (old?.expired && old.code === code && hashStr(JSON.stringify(state)) !== old.syncedHash) {
-          cloud.session = { url, code, token: r.token, remember, updatedAt: old.updatedAt, syncedHash: old.syncedHash };
+          cloud.session = { url, code, token: r.token, remember, loginAt: Date.now(), updatedAt: old.updatedAt, syncedHash: old.syncedHash };
           setSession(cloud.session);
           $('#cloudDialog').close();
           openConflict(r.updatedAt, r.data);
           return;
         }
         if (old && old.code !== code) { try { localStorage.removeItem(classKey(old.code)); } catch { /* ignore */ } }
-        cloud.session = { url, code, token: r.token, remember, updatedAt: r.updatedAt, syncedHash: '' };
+        cloud.session = { url, code, token: r.token, remember, loginAt: Date.now(), updatedAt: r.updatedAt, syncedHash: '' };
         applyCloudState(data, r.updatedAt);
         toast(`已登入 ${code}`);
       } else {
@@ -2139,9 +2268,9 @@ async function cloudAction(act) {
         state = newState;
         const data = await makeDataCode();
         state = keep;
-        const r = await cloudCall('create', { code, key, name: newState.className || '', data }, url);
+        const r = await cloudCall('create', { code, pass, remember, name: newState.className || '', data });
         if (!r.ok) { cloudMsg(cloudErrText(r)); return; }
-        cloud.session = { url, code, token: r.token, remember, updatedAt: r.updatedAt, syncedHash: '' };
+        cloud.session = { url, code, token: r.token, remember, loginAt: Date.now(), updatedAt: r.updatedAt, syncedHash: '' };
         applyCloudState(normalize(newState), r.updatedAt);
         toast(`已建立班級 ${code}，之後會自動存到雲端`);
       }
@@ -2151,11 +2280,9 @@ async function cloudAction(act) {
     if (act === 'drawlink') {
       const sess = cloud.session;
       await cloudSave();
-      const r = await cloudCall('drawlink', { code: sess.code, token: sess.token, hours: Number($('#clDrawHours').value) || 24 }, sess.url);
-      if (!r.ok) { cloudMsg(r.error === 'action' ? '雲端程式版本太舊，請更新 Code.gs 後重新部署' : cloudErrText(r)); return; }
-      const base = location.origin + location.pathname;
-      const u = sess.url && sess.url !== DEFAULT_CLOUD_URL ? `&u=${encodeURIComponent(sess.url)}` : '';
-      const link = `${base}#draw=${encodeURIComponent(sess.code)}&t=${r.drawToken}${u}`;
+      const r = await cloudCall('drawlink', { code: sess.code, token: sess.token, hours: Number($('#clDrawHours').value) || 24 });
+      if (!r.ok) { cloudMsg(cloudErrText(r)); return; }
+      const link = `${location.origin + location.pathname}#draw=${encodeURIComponent(sess.code)}&t=${r.drawToken}`;
       $('#clDrawOut').hidden = false;
       $('#clDrawLink').value = link;
       let copied = false;
@@ -2173,7 +2300,7 @@ async function cloudAction(act) {
     if (act === 'drawrevoke') {
       if (!confirm('停用所有已產生的抽籤連結？')) return;
       const sess = cloud.session;
-      const r = await cloudCall('drawrevoke', { code: sess.code, token: sess.token }, sess.url);
+      const r = await cloudCall('drawrevoke', { code: sess.code, token: sess.token });
       cloudMsg(r.ok ? '✓ 所有抽籤連結都已停用' : cloudErrText(r), !r.ok);
       return;
     }
@@ -2182,10 +2309,11 @@ async function cloudAction(act) {
     if (act === 'passwd') {
       const np = $('#clNewPass').value, op = $('#clOldPass').value;
       if (!op) { cloudMsg('請輸入目前的密碼'); return; }
-      if (np.length < 4) { cloudMsg('新密碼至少 4 個字'); return; }
+      if (np.length < 6) { cloudMsg('新密碼至少 6 個字'); return; }
       const sess = cloud.session;
-      const r = await cloudCall('passwd', { code: sess.code, token: sess.token, key: await makeKey(sess.code, op), newKey: await makeKey(sess.code, np) }, sess.url);
+      const r = await cloudCall('passwd', { code: sess.code, token: sess.token, oldPass: op, newPass: np });
       if (!r.ok) { cloudMsg(r.error === 'wrongpass' ? '目前的密碼不對' : cloudErrText(r)); return; }
+      sess.loginAt = r.loginAt + 1; setSession(sess);
       $('#clNewPass').value = ''; $('#clOldPass').value = '';
       cloudMsg('✓ 已更改老師密碼', false);
       return;
@@ -2197,7 +2325,7 @@ async function cloudAction(act) {
         if (hashStr(JSON.stringify(state)) !== cloud.session?.syncedHash && !confirm('還有修改沒有存到雲端，確定要登出嗎？')) return;
       }
       if (act === 'logout-clear') { try { localStorage.removeItem(classKey(sess.code)); } catch { /* ignore */ } }
-      if (!sess.expired) cloudCall('logout', { code: sess.code, token: sess.token }, sess.url).catch(() => {});
+      if (!sess.expired) await cloudCall('logout', { code: sess.code, token: sess.token }).catch(() => {});
       cloud.session = null;
       setSession(null);
       clearTimeout(cloud.timer);
@@ -2211,7 +2339,7 @@ async function cloudAction(act) {
       toast(act === 'logout-clear' ? '已登出，並清除這台裝置上的班級資料' : '已登出');
     }
   } catch (err) {
-    cloudMsg(err.message && !/fetch|network|JSON/i.test(err.message) ? err.message : '連不上雲端，請檢查網路或雲端網址');
+    cloudMsg(err.message && !/fetch|network|JSON|load/i.test(err.message) ? err.message : '連不上雲端，請檢查網路');
   }
 }
 
@@ -2230,9 +2358,12 @@ function bindCloud() {
   window.addEventListener('online', () => cloudSave());
   // 切回這個分頁時，看看其他裝置有沒有新資料
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') cloudPull({ quiet: false }); });
+  document.body.classList.toggle('no-cloud', !cloudEnabled());
   renderCloudButton();
   if (cloud.session?.kiosk) startKiosk();
-  else if (cloud.session) cloudPull({ quiet: true });
+  else if (cloud.session && cloudEnabled()) cloudPull({ quiet: true });
+  // 開著的時候每分鐘看一次其他裝置有沒有新資料
+  setInterval(() => { if (document.visibilityState === 'visible' && cloud.session && !cloud.session.kiosk) cloudPull({ quiet: false }); }, 60000);
 }
 
 /* ---------- 抽籤專用模式（給學校大屏） ---------- */
@@ -2247,8 +2378,9 @@ async function startKiosk() {
   kioskMessage('載入中…');
   const sess = cloud.session;
   try {
-    const r = await cloudCall('load', { code: sess.code, token: sess.token }, sess.url || cloudUrl());
+    const r = await cloudCall('load', { code: sess.code, token: sess.token });
     if (!r.ok) { kioskMessage(r.error === 'session' ? CLOUD_ERR.kiosk : cloudErrText(r)); return; }
+    // 抽籤連結只顯示畫面，不需要 Firebase 設定以外的東西
     const data = normalize(await readDataCode(r.data));
     if (!data) { kioskMessage('雲端資料格式不正確'); return; }
     data.tab = 'seats';
