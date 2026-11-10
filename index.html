@@ -101,6 +101,7 @@
         <button class="btn small" id="btnFlip"></button>
         <button class="btn small" id="btnUnlockAll">解除全部鎖定</button>
         <button class="btn small secret-btn" id="btnSecret">說明</button>
+        <button class="btn small" id="btnBig" title="投影給學生看：只顯示座位表">📺 大屏</button>
         <button class="btn small" id="btnPrint">🖨 列印</button>
       </div>
     </section>
@@ -176,35 +177,6 @@
     </div>
   </dialog>
 
-  <dialog id="drawDialog">
-    <form method="dialog" class="dlg">
-      <h2>🎰 抽籤排座</h2>
-      <p class="hint">像廟裡求籤一樣：搖一搖籤筒，跳出一支籤，上面就是坐這個位子的同學。🔒 鎖定的同學不會被抽到別的位子。</p>
-      <fieldset class="dlg-field">
-        <legend>怎麼抽</legend>
-        <label><input type="radio" name="drawMode" value="cond" checked> 依條件（遵守不可相鄰、身高、視力等設定）</label>
-        <label><input type="radio" name="drawMode" value="random"> 完全隨機（不看任何條件）</label>
-      </fieldset>
-      <fieldset class="dlg-field">
-        <legend>揭曉順序</legend>
-        <label><input type="radio" name="drawOrder" value="front" checked> 從前排開始</label>
-        <label><input type="radio" name="drawOrder" value="random"> 隨機順序</label>
-      </fieldset>
-      <fieldset class="dlg-field">
-        <legend>速度</legend>
-        <span class="draw-speeds">
-          <label><input type="radio" name="drawSpeed" value="fast"> 快</label>
-          <label><input type="radio" name="drawSpeed" value="mid" checked> 普通</label>
-          <label><input type="radio" name="drawSpeed" value="slow"> 慢（適合投影揭曉）</label>
-        </span>
-      </fieldset>
-      <div class="dlg-actions">
-        <button class="btn" value="cancel">取消</button>
-        <button class="btn primary" value="ok">開始抽籤</button>
-      </div>
-    </form>
-  </dialog>
-
   <div class="draw-stage" id="drawBanner" hidden>
     <div class="draw-label" id="drawLabel"></div>
     <div class="qian">
@@ -214,7 +186,18 @@
         <div class="qian-body"><span>籤</span></div>
       </div>
     </div>
-    <button class="btn small" id="drawSkip">跳過動畫 ⏭</button>
+    <button class="btn draw-shake" id="drawShake">先選座號</button>
+    <div class="draw-left" id="drawLeft"></div>
+    <div class="draw-pad" id="drawPad"></div>
+    <div class="draw-foot">
+      <button class="btn small" id="drawRevealAll">全部揭曉</button>
+      <button class="btn small" id="drawEnd">結束抽籤</button>
+    </div>
+  </div>
+
+  <div class="big-bar" id="bigBar" hidden>
+    <button class="btn draw-btn" id="bigDraw">🎰 抽籤</button>
+    <button class="btn small" id="bigExit">離開大屏</button>
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
