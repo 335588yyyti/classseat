@@ -1550,10 +1550,10 @@ function bindSecret() {
 function askClearUsedFixed() {
   const n = Object.keys(state.secret.fixed).length;
   if (!state.secret.usedAt || !n) return;
-  if (confirm(`上次抽籤用的「內定」（${n} 個座位）還在。\n要先清空嗎？\n\n按「確定」清空內定（「不會抽到」「不能坐隔壁」會保留），按「取消」繼續沿用。`)) {
+  if (confirm('上次抽籤用的座位說明還在，要先清空嗎？')) {
     state.secret.fixed = {};
     state.secret.backup = {};
-    toast('已清空上次的內定');
+    toast('已清空');
   }
   delete state.secret.usedAt;
   save();
