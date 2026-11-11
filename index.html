@@ -96,6 +96,7 @@
         </div>
         <span class="edit-tools" id="editTools">
           <button class="btn small" id="btnAddDesk">＋ 新增座位</button>
+          <button class="btn small" id="btnDelEmpty" title="把沒有人坐的空位一次刪掉">－ 刪除多的空位</button>
           <label class="grp-pick">新座位加入 <select id="newDeskGroup" aria-label="新座位加入的組別"></select></label>
           <button class="btn small" id="btnResetDesks">還原桌椅排列</button>
         </span>
@@ -322,7 +323,7 @@
           <ul>
             <li><b>直排／分組／ㄇ字型：</b>系統照人數自動排好桌子。</li>
             <li><b>座位圖（例如 本班）：</b>自己的排法，可以存很多張。按「＋ 新增座位圖」取名並選從哪種排法開始。</li>
-            <li><b>調整桌子：</b>座位圖裡，在空白處點兩下＝新增座位；拖到空白處＝移動；桌子左上角 ×＝刪除。</li>
+            <li><b>調整桌子：</b>座位圖裡，在空白處點兩下＝新增座位；拖到空白處＝移動；桌子左上角 ×＝刪除；「－ 刪除多的空位」一次刪掉沒人坐的空位。</li>
             <li><b>分組：</b>「依位置自動分組」把靠在一起的桌子分成同一組；點一下座位可以改它屬於第幾組。</li>
             <li><b>拖曳：</b>把學生拖到另一個座位＝互換；🔓 可以鎖定，自動排座時不會動。</li>
             <li><b>🧺 清空座位自己排：</b>座位全部清空（鎖定的不動），名條排在左邊；把名條拖到座位上，或點名條再點座位。放到有人的座位，原本的人會回到名條區；座位上的人拖回名條區＝拿下來。「剩下的依座號放進空位」一次放完。</li>

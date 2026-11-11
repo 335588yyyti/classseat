@@ -530,3 +530,5 @@ body.big-screen .pool, body.is-drawing .pool { display: none !important; }
   .pool-list { flex-direction: row; flex-wrap: wrap; max-height: 160px; }
 }
 @media print { .pool { display: none !important; } }
+.desk.empty .del { opacity: .85; }
+@media (hover: none) { .desk .del { opacity: 1; } }

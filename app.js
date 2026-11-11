@@ -208,7 +208,7 @@ async function saveNow() {
   const hm = new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false });
   if (cloud.session && !cloud.session.kiosk && !cloud.session.expired) {
     toast('儲存中…');
-    clearTimeout(cloud.timer);
+    clearTimeout(cloud.timer); cloud.timer = null;
     await cloudSave(true);
     if (cloud.status === 'ok') { toast(`✓ 已儲存到雲端（${cloud.session.code}）`); stamp(`✓ ${hm} 已存到雲端`); }
     else { toast(okLocal ? '已存在這台，雲端還沒存到，連上網路後會自動上傳' : '儲存失敗', 4000); stamp(okLocal ? `${hm} 已存在這台` : ''); }
@@ -2208,7 +2208,7 @@ function renderCloudButton() {
   if (!b) return;
   const s = cloud.session;
   const label = {
-    idle: '', ok: '✓ 已同步', saving: '同步中…', offline: '⚠ 離線，稍後同步', conflict: '⚠ 有衝突', error: '⚠ 未同步',
+    idle: '', ok: '✓ 已同步', dirty: '● 稍後同步', saving: '同步中…', offline: '⚠ 離線，稍後同步', conflict: '⚠ 有衝突', error: '⚠ 未同步',
   }[cloud.status] || '';
   b.textContent = s ? `☁️ ${s.code} ${s.expired ? '⚠ 請重新登入' : label}`.trim() : '☁️ 雲端';
   b.classList.toggle('warn', !!s && (s.expired || ['offline', 'conflict', 'error'].includes(cloud.status)));
@@ -2216,9 +2216,22 @@ function renderCloudButton() {
   b.title = s ? `雲端班級：${s.code}${cloud.msg ? '（' + cloud.msg + '）' : ''}` : '用班級代碼＋老師密碼存到雲端';
 }
 
+// 自動同步的間隔：5 分鐘（按「💾 儲存」、切到別的視窗或關掉網頁時會馬上上傳）
+const SYNC_MS = 5 * 60 * 1000;
 function scheduleCloudSave() {
-  clearTimeout(cloud.timer);
-  cloud.timer = setTimeout(() => cloudSave(), 2500);
+  // 抽籤專用連結：結果要盡快回到雲端
+  if (cloud.session?.kiosk) { clearTimeout(cloud.timer); cloud.timer = setTimeout(() => cloudSave(), 2500); return; }
+  if (cloud.status === 'ok' || cloud.status === 'idle') setCloudStatus('dirty');
+  if (cloud.timer) return; // 已經排好了，不用每改一次就重新計時
+  cloud.timer = setTimeout(() => { cloud.timer = null; cloudSave(); }, SYNC_MS);
+}
+/** 有還沒上傳的修改就馬上上傳 */
+function flushCloudSave() {
+  const sess = cloud.session;
+  if (!sess || sess.expired || sess.kiosk) return;
+  if (hashStr(JSON.stringify(state)) === sess.syncedHash) return;
+  clearTimeout(cloud.timer); cloud.timer = null;
+  cloudSave();
 }
 
 async function cloudSave(force = false) {
@@ -2267,7 +2280,7 @@ function applyCloudState(newState, updatedAt) {
   cloud.session.updatedAt = updatedAt;
   cloud.session.syncedHash = hashStr(json);
   setSession(cloud.session);
-  clearTimeout(cloud.timer);
+  clearTimeout(cloud.timer); cloud.timer = null;
   setCloudStatus('ok');
 }
 
@@ -2275,6 +2288,7 @@ function applyCloudState(newState, updatedAt) {
 async function cloudPull({ quiet = false } = {}) {
   const sess = cloud.session;
   if (!sess || sess.expired || cloud.busy || ui.drawing) return;
+  cloud.pulledAt = Date.now();
   try {
     const r = await cloudCall('load', { code: sess.code, token: sess.token, loginAt: sess.loginAt });
     if (!r.ok) { if (r.error === 'session') sessionExpired(); else setCloudStatus(r.error === 'offline' ? 'offline' : 'error', cloudErrText(r)); return; }
@@ -2507,7 +2521,7 @@ async function cloudAction(act) {
       if (!sess.expired) await cloudCall('logout', { code: sess.code, token: sess.token }).catch(() => {});
       cloud.session = null;
       setSession(null);
-      clearTimeout(cloud.timer);
+      clearTimeout(cloud.timer); cloud.timer = null;
       state = load() || defaultState();
       ui.history = []; ui.selected = null; ui.selSeat = null;
       $('#className').value = state.className || '';
@@ -2547,14 +2561,19 @@ function bindCloud() {
   $('#conflictLocal').addEventListener('click', () => resolveConflict(false));
   window.addEventListener('online', () => cloudSave());
   // 切回這個分頁時，看看其他裝置有沒有新資料
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') cloudPull({ quiet: false }); });
+  // 切回來時，超過 5 分鐘沒檢查才去看；切走時把還沒上傳的修改送出去
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') { if (Date.now() - (cloud.pulledAt || 0) > SYNC_MS) cloudPull({ quiet: false }); }
+    else flushCloudSave();
+  });
+  window.addEventListener('pagehide', flushCloudSave);
   document.body.classList.toggle('no-cloud', !cloudEnabled());
   renderCloudButton();
   if (cloud.session?.kiosk) startKiosk();
   else if (cloud.session && cloudEnabled()) cloudPull({ quiet: true });
   else if (FIRST_VISIT && cloudEnabled()) { renderCloudDialog(true); $('#cloudDialog').showModal(); }
-  // 開著的時候每分鐘看一次其他裝置有沒有新資料
-  setInterval(() => { if (document.visibilityState === 'visible' && cloud.session && !cloud.session.kiosk) cloudPull({ quiet: false }); }, 60000);
+  // 開著的時候每 5 分鐘看一次其他裝置有沒有新資料
+  setInterval(() => { if (document.visibilityState === 'visible' && cloud.session && !cloud.session.kiosk && Date.now() - (cloud.pulledAt || 0) >= SYNC_MS - 1000) cloudPull({ quiet: false }); }, 60000);
 }
 
 /* ---------- 抽籤專用模式（給學校大屏） ---------- */
@@ -2924,16 +2943,38 @@ function addDeskAt(x, y) {
   state.seats.push(seat);
   // 有學生還沒座位時，直接坐進新座位
   const seated = new Set(Object.values(state.assign));
-  const waiting = sortedStudents().find((s) => !seated.has(s.id));
+  const pooled = new Set(state.pool || []);
+  const waiting = sortedStudents().find((s) => !seated.has(s.id) && !pooled.has(s.id));
   if (waiting) state.assign[seat.id] = waiting.id;
   markDesksEdited();
   save();
   renderSeatsPanel();
 }
 
+/** 一次刪掉多出來的空位（名條區還沒放的人，會留給他們足夠的空位） */
+function deleteExtraDesks() {
+  const need = (state.pool || []).length;
+  const empties = seatOrder(state.seats).filter((x) => !state.assign[x.id]);
+  const extra = empties.length - need;
+  if (extra <= 0) { toast(need ? '空位剛好夠名條區的同學，沒有多的' : '沒有空位可以刪'); return; }
+  if (!confirm(`要刪掉 ${extra} 個沒有人坐的空位嗎？（按錯可以按「↶ 復原」）`)) return;
+  pushHistory();
+  const drop = new Set(empties.slice(-extra).map((x) => x.id));
+  state.seats = state.seats.filter((x) => !drop.has(x.id));
+  markDesksEdited();
+  save();
+  renderSeatsPanel();
+  toast(`已刪掉 ${extra} 個空位`);
+}
+
 function deleteDesk(seatId) {
   const sid = state.assign[seatId];
-  if (sid) {
+  if (sid && state.pool?.length) {
+    // 正在自己排：坐在這裡的人回到名條區
+    pushHistory();
+    state.pool.push(sid);
+    toast(`${studentById(sid)?.name || '學生'} 回到名條區`);
+  } else if (sid) {
     const empty = seatOrder(state.seats).find((s) => s.id !== seatId && !state.assign[s.id]);
     if (!empty) { toast('座位不能少於學生人數；請先新增空位或減少人數'); return; }
     pushHistory();
@@ -3179,6 +3220,7 @@ function bindSeatsPanel() {
     }, 30);
   });
   $('#btnClearSeats').addEventListener('click', clearSeatsToPool);
+  $('#btnDelEmpty').addEventListener('click', deleteExtraDesks);
   $('#btnRandom').addEventListener('click', () => { askClearUsedFixed(); pushHistory(); optimize(false); save(); renderSeatsPanel(); toast('已隨機排座（鎖定的座位不變）'); });
   $('#btnUndo').addEventListener('click', () => {
     const h = ui.history.pop();
