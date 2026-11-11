@@ -934,9 +934,9 @@ function renderConditions() {
     ['myopia', '👓 視力', '近視坐前排', '近視的同學優先安排在前排'],
     ['height', '📏 身高', '矮前高後', '矮的同學坐前面、高的坐後面（填公分或選 矮／中矮／中／中高／高）'],
     ['gender', '⚥ 性別', '男生旁邊放女生、每組有男有女', '男生的左右兩旁盡量安排女生（女生旁邊不限制）；分組時每一組都要有男生也有女生'],
-    ['prevSeat', '🔁 換位子', '不坐坐過的位子', '不要坐最近幾次坐過的位子（在座位安排按「📌 記住目前座位」記錄，最多記 3 次）'],
-    ['prevSide', '↔ 左右換邊', '上次左側→換右側', '上次坐左側的換到右側、右側的換到左側；中間的不限（以「📌 記住目前座位」為準）'],
-    ['prevGroup', '👥 換組員', '上次同組的盡量分開', '上次同一組的同學（不是分組時看上次坐在旁邊的），這次盡量不要再同組（以「📌 記住目前座位」為準）'],
+    ['prevSeat', '🔁 換位子', '不坐坐過的位子', '不要坐最近幾次坐過的位子（在座位安排按「📌 記住教室現在的座位」記錄，最多記 3 次）'],
+    ['prevSide', '↔ 左右換邊', '上次左側→換右側', '上次坐左側的換到右側、右側的換到左側；中間的不限（以「📌 記住教室現在的座位」為準）'],
+    ['prevGroup', '👥 換組員', '上次同組的盡量分開', '上次同一組的同學（不是分組時看上次坐在旁邊的），這次盡量不要再同組（以「📌 記住教室現在的座位」為準）'],
   ];
   $('#builtinConds').innerHTML = defs.map(([k, title, short, desc]) => `
     <div class="cond ${c[k].on ? '' : 'off'}" title="${desc}">
@@ -1942,17 +1942,23 @@ const isClean = () => document.body.classList.contains('big-screen') || !!ui.dra
 
 function startDraw() {
   if (ui.drawing) return;
-  askRememberCurrent();
-  ui.secretMode = false; // 抽籤時一定藏起老師的安排
+  // 老師畫面上按抽籤＝測試：設定面板留著；給學生抽（大屏、抽籤專用連結）才藏起老師的東西
+  const test = !document.body.classList.contains('big-screen') && !cloud.session?.kiosk;
+  if (!test) askRememberCurrent();
+  if (!test) ui.secretMode = false; // 學生看得到的畫面：一定藏起老師的安排
   ui.selSeat = null; ui.selected = null;
   pushHistory();
+  ui.drawTestHistory = test ? ui.history.length : 0;
   // 結果先依老師的設定排好、藏起來，學生抽到時才揭曉
   const sessionFixed = { ...state.secret.fixed };
   optimize(state.drawOpts.mode !== 'random', null, sessionFixed);
   save();
   const locked = new Set(state.locked);
   ui.drawing = { done: new Set(state.students.filter((x) => locked.has(x.id)).map((x) => x.id)), current: null, last: null, busy: false, mode: 'draw', fixed: sessionFixed };
+  ui.drawing.test = test;
   document.body.classList.add('is-drawing');
+  document.body.classList.toggle('draw-test', test);
+  $('#drawTestNote').hidden = !test;
   $('#drawBanner').hidden = false;
   $('#drawStick').classList.remove('rise');
   setDrawLabel('請選擇座號');
@@ -2083,12 +2089,22 @@ function endDraw() {
   if (!ui.drawing) return;
   const left = state.students.filter((x) => !ui.drawing.done.has(x.id)).length;
   if (left && !confirm(`還有 ${left} 人沒抽，結束後會直接顯示全部座位。確定結束？`)) return;
+  const test = ui.drawing.test;
   ui.drawing = null;
   ui.revealed = true;
-  // 記下這份內定已經用過（下次老師重排時會提醒清空）
-  if (Object.keys(state.secret.fixed).length) { state.secret.usedAt = Date.now(); save(); }
+  // 記下這份內定已經用過（下次老師重排時會提醒清空）；老師測試的不算
+  if (!test && Object.keys(state.secret.fixed).length) { state.secret.usedAt = Date.now(); save(); }
   $('#drawBanner').hidden = true;
-  document.body.classList.remove('is-drawing', 'pick-mode');
+  document.body.classList.remove('is-drawing', 'pick-mode', 'draw-test');
+  // 測試抽籤：問要不要回到抽籤前的座位
+  if (test && ui.history.length >= ui.drawTestHistory && ui.drawTestHistory && confirm('測試抽籤結束。\n要把座位恢復成抽籤前的樣子嗎？\n\n確定＝恢復　取消＝保留抽出來的座位')) {
+    ui.history.length = ui.drawTestHistory;
+    Object.assign(state, JSON.parse(ui.history.pop()));
+    ensureSeating(); save();
+    renderSeatsPanel();
+    toast('已恢復成抽籤前的座位');
+    return;
+  }
   renderSeatsPanel();
   toast('抽籤結束');
 }
@@ -2176,6 +2192,16 @@ function prevGroupMates() {
   return out;
 }
 
+/** 💾 存下新排的座位：存成「我的方案」，不會變成教室現在的座位 */
+function saveNewSeating() {
+  const def = `新排的座位 ${fmtTime(Date.now())}`;
+  const name = prompt('幫這份新排的座位取個名字（之後可以在「📚 紀錄／方案 → 我的方案」一鍵載入）', def);
+  if (name === null) return;
+  state.plans = [...(state.plans || []), { id: uid(), name: name.trim() || def, ...currentPlanData(true) }];
+  save();
+  toast(`已存成方案「${name.trim() || def}」，在「📚 紀錄／方案 → 我的方案」。學生照這份坐好之後，再按「📌 記住教室現在的座位」`, 5000);
+}
+
 /** 目前畫面上的座位跟「上次記住的」一樣嗎 */
 function sameAsPrev() {
   const p = state.prev?.seats;
@@ -2193,7 +2219,7 @@ function askRememberCurrent() {
   if (cloud.session?.kiosk || document.body.classList.contains('big-screen')) return;
   if ((state.pool || []).length || Object.keys(state.assign).length < state.students.length) return;
   if (hashStr(JSON.stringify(state.assign)) === state.autoHash || sameAsPrev()) return;
-  if (confirm('目前畫面上的座位還沒記住。\n要先記成「目前座位」嗎？這次「換位子」「左右換邊」會以它為準。')) rememberSeating({ quiet: true });
+  if (confirm('畫面上的座位還沒記住。\n這是學生「現在在坐」的座位嗎？\n\n確定＝記成教室現在的座位，這次換位子、換邊、換組員會以它為準\n取消＝不記（只是試排的）')) rememberSeating({ quiet: true });
 }
 
 function rememberSeating({ quiet = false } = {}) {
@@ -2214,7 +2240,7 @@ function rememberSeating({ quiet = false } = {}) {
   const backup = !quiet && !cloud.session;
   if (backup) exportData();
   renderSeatsPanel();
-  toast(cloud.session?.kiosk ? '已記住這次座位' : `已記住目前座位（可在「📚 紀錄／方案」查看）${backup ? '，備份檔也下載到「下載」資料夾了' : ''}`, 4000);
+  toast(cloud.session?.kiosk ? '已記住這次座位' : `已記住教室現在的座位（可在「📚 紀錄／方案」查看）${backup ? '，備份檔也下載到「下載」資料夾了' : ''}`, 4000);
 }
 
 /** 下載資料備份（JSON） */
@@ -3255,7 +3281,7 @@ function renderRecords() {
   let html = '';
   if (tab === 'hist') {
     const recs = allRecords();
-    html = `<p class="hint">每按一次「📌 記住目前座位」就會存一筆在這裡（存在這台裝置的瀏覽器，最多 ${MAX_RECORDS} 次；用「💾 備份／搬移」可以帶到其他裝置）。排座條件「🔁 換位子」會參考最近 ${prevN()} 次。</p>`
+    html = `<p class="hint">每按一次「📌 記住教室現在的座位」就會存一筆在這裡（存在這台裝置的瀏覽器，最多 ${MAX_RECORDS} 次；用「💾 備份／搬移」可以帶到其他裝置）。排座條件「🔁 換位子」會參考最近 ${prevN()} 次。</p>`
       + (recs.length ? recs.map((r, i) => {
         const { seats, assign } = recordToSeats(r);
         const label = i === 0 ? '最近一次' : `前 ${i + 1} 次`;
@@ -3264,7 +3290,7 @@ function renderRecords() {
           <div class="rec-info"><b>${label}</b><span class="hint">${fmtTime(r.at)}・${Object.keys(r.seats).length} 人</span>
             <div class="rec-actions"><button class="btn small" data-rec-zoom="${i}">放大看</button><button class="btn small" data-rec-apply="${i}">套用到座位表</button><button class="link-btn" data-rec-del="${i}">刪除</button></div></div>
         </div>`;
-      }).join('') : '<p class="empty-note">還沒有紀錄。座位排好或抽完籤後，按工具列的「📌 記住目前座位」。</p>');
+      }).join('') : '<p class="empty-note">還沒有紀錄。座位排好或抽完籤後，按工具列的「📌 記住教室現在的座位」。</p>');
   } else {
     const plans = state.plans || [];
     html = `<p class="hint">把目前的座位存成方案，之後一鍵載入（例如「段考版」「分組討論版」）。勾選「連同老師的安排」會一起存下內定、不會抽到、不能坐隔壁的設定。</p>
@@ -3749,12 +3775,22 @@ function bindSeatsPanel() {
   $('#mapDialog').addEventListener('close', () => { if ($('#mapDialog').returnValue === 'ok') createMap(); });
   // 按「抽籤」直接進入籤筒畫面，設定在「說明」面板裡
   $('#btnDraw').addEventListener('click', startDraw);
+  $('#btnDrawLink').addEventListener('click', async () => {
+    renderCloudDialog();
+    $('#cloudDialog').showModal();
+    if (!cloud.session || cloud.session.expired) { cloudMsg('要先登入或建立雲端班級，才能產生抽籤連結'); return; }
+    const sel = $('#clDrawHours');
+    sel?.closest('.tf-row')?.scrollIntoView({ block: 'center' });
+    cloud.lastBtn = $('#cloudBody [data-cl="drawlink"]');
+    await cloudAction('drawlink');
+  });
   $('#bigDraw').addEventListener('click', () => {
     if (document.body.classList.contains('kiosk') && !document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});
     startDraw();
   });
   $('#btnBig').addEventListener('click', () => setBigScreen(true));
   $('#btnRemember').addEventListener('click', () => rememberSeating());
+  $('#btnSaveNew').addEventListener('click', saveNewSeating);
   $('#bigExit').addEventListener('click', () => setBigScreen(false));
   $('#drawPad').addEventListener('click', (e) => {
     const b = e.target.closest('[data-draw-no]');

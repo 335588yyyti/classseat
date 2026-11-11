@@ -85,7 +85,8 @@
         <div class="layout-opts" id="layoutOpts"></div>
         <span class="spacer"></span>
         <button class="btn primary" id="btnArrange">✨ 依條件自動排座</button>
-        <button class="btn draw-btn" id="btnDraw">🎰 抽籤</button>
+        <button class="btn draw-btn" id="btnDraw" title="在老師畫面先試抽，設定面板會留著，抽完可以恢復原本的座位">🧪 抽籤測試</button>
+        <button class="btn cloud-btn" id="btnDrawLink" title="產生給學校大屏用的抽籤連結（要先登入雲端班級）">🔗 產生抽籤連結</button>
         <button class="btn" id="btnRandom">🎲 隨機</button>
         <button class="btn" id="btnClearSeats" title="座位全部清空，名條放在左邊，自己一個一個放">🧺 清空座位自己排</button>
         <button class="btn" id="btnUndo" title="復原上一步">↶ 復原</button>
@@ -103,7 +104,8 @@
         </span>
         <span class="spacer"></span>
         <button class="btn small" id="btnFlip"></button>
-        <button class="btn small" id="btnRemember" title="把目前畫面上的座位記下來；換位子、左右換邊會以它為準">📌 記住目前座位</button>
+        <button class="btn small" id="btnRemember" title="學生照畫面上的座位坐好之後按：記成教室現在的座位，下次換位子、換邊、換組員以它為準">📌 記住教室現在的座位</button>
+        <button class="btn small" id="btnSaveNew" title="把剛排好、還沒實際換的座位存起來（存成方案），不會影響換位子的判斷">💾 存下新排的座位</button>
         <button class="btn small" id="btnRecords">📚 紀錄／方案</button>
         <button class="btn small" id="btnUnlockAll">解除全部鎖定</button>
         <button class="btn small secret-btn" id="btnSecret">說明</button>
@@ -201,6 +203,7 @@
   </dialog>
 
   <div class="draw-stage" id="drawBanner" hidden>
+    <p class="draw-test-note" id="drawTestNote" hidden>🧪 老師畫面的測試抽籤：設定面板會留著。給學生抽請用「📺 大屏」或抽籤專用連結。</p>
     <div class="draw-modes" id="drawModes">
       <button data-dmode="draw" class="on">🎰 抽籤</button>
       <button data-dmode="pick">⭐ 自選座位</button>
@@ -217,7 +220,7 @@
     <div class="draw-left" id="drawLeft"></div>
     <div class="draw-pad" id="drawPad"></div>
     <div class="draw-foot">
-      <button class="btn small draw-remember" id="drawRemember" hidden>📌 記住目前座位</button>
+      <button class="btn small draw-remember" id="drawRemember" hidden>📌 記住教室現在的座位</button>
       <button class="btn small" id="drawRevealAll">全部揭曉</button>
       <button class="btn small" id="drawEnd">結束抽籤</button>
     </div>
@@ -290,8 +293,8 @@
             <li>在「① 學生與條件」設定班級人數（26～40 人），或按「批次貼上名單」一次貼上全班。</li>
             <li>每位學生的卡片可以改姓名、性別、近視、身高；按「條件設定」可以設同學關係和座位偏好。備註格也可以直接打「不要跟24號坐」「不要跟24同組附近」「跟5號同組」，打完系統就會設定好。</li>
             <li>到「② 座位安排」選座位型式（直排、分組、ㄇ字型或座位圖）。</li>
-            <li>按「✨ 依條件自動排座」，或按「🎰 抽籤」讓學生上台抽。</li>
-            <li>排好之後按「📌 記住目前座位」，下次換座位時系統會避開同一個位子、左右換邊。自己拖好的座位，按自動排座或隨機前也會問要不要先記住。</li>
+            <li>按「✨ 依條件自動排座」，或用「🔗 產生抽籤連結」／「📺 大屏」讓學生上台抽（「🧪 抽籤測試」可以先自己試）。</li>
+            <li>排好之後按「📌 記住教室現在的座位」，下次換座位時系統會避開同一個位子、左右換邊。自己拖好的座位，按自動排座或隨機前也會問要不要先記住。</li>
           </ol>
         </details>
 
@@ -315,9 +318,9 @@
         <details><summary>⚙️ 排座條件</summary>
           <ul>
             <li><b>視力：</b>近視坐前排。<b>身高：</b>矮前高後。<b>性別：</b>男生旁邊盡量放女生；分組時每組都要有男有女。</li>
-            <li><b>🔁 換位子：</b>不坐最近 1～3 次坐過的位子。<b>↔ 左右換邊：</b>上次坐左側的換到右側。（以「📌 記住目前座位」為準）</li>
+            <li><b>🔁 換位子：</b>不坐最近 1～3 次坐過的位子。<b>↔ 左右換邊：</b>上次坐左側的換到右側。（以「📌 記住教室現在的座位」為準）</li>
             <li><b>🎲 隨機：</b>其他都隨機，但一定遵守不可相鄰、不可同組、換位子、左右換邊、每組男女和老師的安排；想連身高、視力、偏好都照顧，按「✨ 依條件自動排座」。</li>
-            <li><b>👥 換組員：</b>上次同一組的同學（不是分組時看上次坐旁邊的），這次盡量分到不同組；以「📌 記住目前座位」為準，🎲 隨機也會遵守。</li>
+            <li><b>👥 換組員：</b>上次同一組的同學（不是分組時看上次坐旁邊的），這次盡量分到不同組；以「📌 記住教室現在的座位」為準，🎲 隨機也會遵守。</li>
             <li><b>📐 相鄰範圍：</b>「不可相鄰」「不能坐隔壁」要離多遠才算分開：只算貼在一起的／中間隔一點也算（預設）／隔一點＋同一組都算。</li>
             <li><b>個人規則：</b>不可相鄰、不可同組一定遵守；盡量同組、座位偏好盡量做到。</li>
             <li><b>自訂條件：</b>可以新增（例如 需要關注、容易聊天），選「盡量前排／後排／彼此分散／僅標示」。</li>
@@ -340,10 +343,10 @@
 
         <details><summary>🎰 抽籤（學生上台抽）</summary>
           <ol>
-            <li>按「🎰 抽籤」進入籤筒畫面，所有座位先變成「？」。</li>
+            <li>給學生抽：用「🔗 產生抽籤連結」在大屏電腦打開，或按「📺 大屏」再按「🎰 抽籤」。進入籤筒畫面後，所有座位先變成「？」。老師自己先試，按「🧪 抽籤測試」（設定面板會留著，抽完可以恢復原本的座位）。</li>
             <li>學生上台點自己的座號 → 按「搖籤筒」→ 跳出寫著名字的籤，他的座位會亮起來。</li>
             <li>抽過的座號會變灰。請假的同學最後按「全部揭曉」。</li>
-            <li>全部抽完可以直接按「📌 記住目前座位」。</li>
+            <li>全部抽完可以直接按「📌 記住教室現在的座位」。</li>
           </ol>
           <ul>
             <li><b>⭐ 自選座位：</b>籤筒畫面上方切換，表現好的同學先點座號、再點想坐的位子；剩下的人再切回抽籤。</li>
@@ -373,7 +376,8 @@
 
         <details><summary>📌 記住座位、📚 紀錄／方案</summary>
           <ul>
-            <li><b>📌 記住目前座位：</b>存一筆座位紀錄（最多 10 次）；沒登入雲端時也會下載一份備份檔。</li>
+            <li><b>📌 記住教室現在的座位：</b>學生照畫面上的座位坐好之後按。存一筆紀錄（最多 10 次），下次換位子、左右換邊、換組員都以它為準；沒登入雲端時也會下載一份備份檔。</li>
+            <li><b>💾 存下新排的座位：</b>剛排好、還沒實際換的座位，先存成「我的方案」，不會影響換位子的判斷；之後在「📚 紀錄／方案」一鍵載入。</li>
             <li><b>📚 紀錄／方案 →「過去的座位」：</b>看縮圖、放大、套用回座位表。</li>
             <li><b>「我的方案」：</b>把目前座位（可連同老師的安排）存成有名字的方案，之後一鍵載入。</li>
             <li><b>🖼 下載圖片：</b>座位表存成圖片，適合傳 LINE。<b>📄 PDF：</b>第 1 頁座位表、第 2 頁學生名單（座號、姓名、性別、組別），適合列印或交給學校，不會印出條件和老師的安排。</li>
