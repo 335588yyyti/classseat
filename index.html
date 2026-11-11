@@ -86,6 +86,7 @@
         <button class="btn primary" id="btnArrange">✨ 依條件自動排座</button>
         <button class="btn draw-btn" id="btnDraw">🎰 抽籤</button>
         <button class="btn" id="btnRandom">🎲 隨機</button>
+        <button class="btn" id="btnClearSeats" title="座位全部清空，名條放在左邊，自己一個一個放">🧺 清空座位自己排</button>
         <button class="btn" id="btnUndo" title="復原上一步">↶ 復原</button>
       </div>
       <div class="tool-row">
@@ -113,8 +114,11 @@
     <div class="seat-layout">
       <section class="card room-card">
         <h2 class="print-title" id="printTitle"></h2>
-        <div class="room-wrap" id="roomWrap">
-          <div class="room" id="room"></div>
+        <div class="room-row">
+          <div class="pool" id="pool" hidden></div>
+          <div class="room-wrap" id="roomWrap">
+            <div class="room" id="room"></div>
+          </div>
         </div>
         <p class="hint room-hint" id="roomHint"></p>
       </section>
@@ -321,6 +325,7 @@
             <li><b>調整桌子：</b>座位圖裡，在空白處點兩下＝新增座位；拖到空白處＝移動；桌子左上角 ×＝刪除。</li>
             <li><b>分組：</b>「依位置自動分組」把靠在一起的桌子分成同一組；點一下座位可以改它屬於第幾組。</li>
             <li><b>拖曳：</b>把學生拖到另一個座位＝互換；🔓 可以鎖定，自動排座時不會動。</li>
+            <li><b>🧺 清空座位自己排：</b>座位全部清空（鎖定的不動），名條排在左邊；把名條拖到座位上，或點名條再點座位。放到有人的座位，原本的人會回到名條區；座位上的人拖回名條區＝拿下來。「剩下的依座號放進空位」一次放完。</li>
           </ul>
         </details>
 

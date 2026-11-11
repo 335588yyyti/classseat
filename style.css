@@ -505,3 +505,28 @@ dialog.guide-dlg { width: min(720px, 96vw); }
 .secret-card .card-head h2, .secret-card #btnGuide, .secret-card #secretClose { white-space: nowrap; }
 .secret-card #btnGuide { padding: 3px 8px; }
 .save-box { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; }
+
+/* 名條區（清空座位自己排） */
+.room-row { display: flex; gap: 10px; align-items: flex-start; }
+.room-row .room-wrap { flex: 1; min-width: 0; }
+.pool { flex: 0 0 150px; position: sticky; top: 8px; max-height: calc(100vh - 40px); display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 2px dashed var(--accent); border-radius: 12px; background: var(--card, #fff); }
+.pool[hidden] { display: none; }
+.pool-head { font-size: 14px; }
+.pool-tip { margin: 0; font-size: 12px; }
+.pool-list { overflow-y: auto; display: flex; flex-direction: column; gap: 5px; min-height: 40px; }
+.pool-chip { display: flex; align-items: baseline; gap: 6px; padding: 6px 8px; border-radius: 8px; border: 1px solid #ddd; border-left: 5px solid #bbb; background: #fffdf6; cursor: grab; user-select: none; touch-action: none; font-size: 16px; }
+.pool-chip.g-M { border-left-color: #3b7dd8; }
+.pool-chip.g-F { border-left-color: #d6588c; }
+.pool-chip .d-no { font-size: 11px; color: #888; min-width: 16px; }
+.pool-chip .pc-name { font-weight: 600; }
+.pool-chip.picked { outline: 3px solid var(--accent); }
+.pool-chip.dragging { opacity: .35; }
+.pool-ghost { position: fixed; z-index: 1000; pointer-events: none; width: 130px; box-shadow: 0 6px 18px rgba(0,0,0,.2); }
+.pool-actions .btn { width: 100%; }
+body.big-screen .pool, body.is-drawing .pool { display: none !important; }
+@media (max-width: 760px) {
+  .room-row { flex-direction: column; align-items: stretch; }
+  .pool { flex: none; position: static; max-height: none; }
+  .pool-list { flex-direction: row; flex-wrap: wrap; max-height: 160px; }
+}
+@media print { .pool { display: none !important; } }

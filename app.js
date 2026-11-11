@@ -78,6 +78,7 @@ function defaultState() {
     drawOpts: { mode: 'cond', order: 'front', speed: 'mid', sound: 'on' },
     seats: [],
     assign: {}, // seatId -> studentId
+    pool: [], // 還沒放進座位的名條（老師一個一個放）
     locked: [], // studentIds
     flipped: false,
     custom: false,
@@ -126,6 +127,7 @@ function normalize(data) {
   delete s.customLayout;
   delete s.freeLayout;
   s.assign = data.assign && typeof data.assign === 'object' ? data.assign : {};
+  s.pool = Array.isArray(data.pool) ? data.pool : [];
   s.locked = Array.isArray(data.locked) ? data.locked : [];
   return s;
 }
@@ -188,6 +190,7 @@ let saveTimer = null;
 function save() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
+    saveTimer = null;
     const json = JSON.stringify(state);
     try { store().setItem(storeKey(), json); } catch { /* 無痕模式等情況 */ }
     // 登入雲端班級時，資料有變就排程上傳
@@ -214,6 +217,13 @@ async function saveNow() {
   } else toast('這個瀏覽器不能儲存（可能是無痕視窗），請用「💾 備份／搬移」', 4000);
 }
 
+// 關掉或重新整理網頁時，把還沒寫進去的修改馬上存好
+window.addEventListener('pagehide', () => {
+  if (!saveTimer) return;
+  clearTimeout(saveTimer); saveTimer = null;
+  try { store().setItem(storeKey(), JSON.stringify(state)); } catch { /* ignore */ }
+});
+
 const ui = { selected: null, selSeat: null, newGroup: 'auto', scale: 1, history: [] };
 
 function toast(msg, ms = 2200) {
@@ -225,7 +235,7 @@ function toast(msg, ms = 2200) {
 }
 
 function pushHistory() {
-  ui.history.push(JSON.stringify({ seats: state.seats, assign: state.assign, locked: state.locked, layout: state.layout, custom: state.custom, maps: state.maps, secret: state.secret }));
+  ui.history.push(JSON.stringify({ seats: state.seats, assign: state.assign, pool: state.pool, locked: state.locked, layout: state.layout, custom: state.custom, maps: state.maps, secret: state.secret }));
   if (ui.history.length > 30) ui.history.shift();
 }
 
@@ -392,7 +402,10 @@ function ensureSeating() {
     if (state.seats.length !== expected || !state.seats.length) { relayout(); return; }
   }
   const seated = new Set(Object.values(state.assign));
-  const unseated = sortedStudents().filter((s) => !seated.has(s.id));
+  // 名條區：只留還在名單上、還沒坐下的人
+  state.pool = [...new Set(state.pool || [])].filter((id) => ids.has(id) && !seated.has(id));
+  const waiting = new Set(state.pool);
+  const unseated = sortedStudents().filter((s) => !seated.has(s.id) && !waiting.has(s.id));
   if (!unseated.length) return;
   let empty = seatOrder(state.seats).filter((s) => !state.assign[s.id]);
   if (empty.length < unseated.length) {
@@ -660,6 +673,7 @@ function optimize(useConditions = true, extraFixed = null, fixedOverride = null)
     }
   }
   state.assign = {};
+  state.pool = [];
   best.occ.forEach((st, si) => { if (st >= 0) state.assign[seats[si].id] = studs[st].id; });
   ui.secretStatus = secretViolations().length;
 }
@@ -1313,6 +1327,7 @@ function bindStudentsPanel() {
       }
     });
     state.assign = {};
+    state.pool = [];
     state.locked = [];
     ui.selected = null;
     relayout();
@@ -1338,6 +1353,7 @@ function renderSeatsPanel() {
   $('#btnUnlockAll').disabled = !state.locked.length;
   $('#btnRemember').title = prevInfoText().replace('📌 ', '');
   renderLayoutOpts();
+  renderPool(); // 先決定名條區在不在，教室才算得出可用寬度
   renderRoom();
   renderLegend();
   $('#btnSecret').classList.toggle('on', !!ui.secretMode);
@@ -2988,6 +3004,60 @@ function renderSelInfo() {
   </dl>${groupBox}<p class="hint">橘框：不可相鄰／同組的對象；綠框：盡量同組的對象。</p>`;
 }
 
+/* ---------- 名條區：清空座位，老師一個一個放 ---------- */
+function renderPool() {
+  const box = $('#pool');
+  if (!box) return;
+  const list = (state.pool || []).map(studentById).filter(Boolean);
+  document.body.classList.toggle('has-pool', list.length > 0);
+  box.hidden = !list.length;
+  $('#btnClearSeats').hidden = list.length > 0;
+  if (!list.length) { box.innerHTML = ''; return; }
+  const empty = state.seats.filter((x) => !state.assign[x.id]).length;
+  box.innerHTML = `<div class="pool-head"><b>名條</b> <span class="hint">還有 ${list.length} 位</span></div>
+    <p class="hint pool-tip">拖到座位上；或點名條再點座位。座位上的人拖回這裡＝拿下來。</p>
+    <div class="pool-list">${list.map((st) => `<div class="pool-chip ${st.gender ? 'g-' + st.gender : ''} ${ui.poolPick === st.id ? 'picked' : ''}" data-pool="${st.id}"><span class="d-no">${esc(st.no)}</span><span class="pc-name">${esc(st.name)}</span></div>`).join('')}</div>
+    <div class="pool-actions"><button class="btn small" id="poolFill" ${empty ? '' : 'disabled'}>剩下的依座號放進空位</button></div>`;
+}
+
+/** 把名條區的同學放進座位；座位上原本有人就換到名條區 */
+function placeFromPool(sid, seatId) {
+  pushHistory();
+  const prev = state.assign[seatId];
+  state.assign[seatId] = sid;
+  const i = state.pool.indexOf(sid);
+  if (prev) state.pool.splice(i, 1, prev); else state.pool.splice(i, 1);
+  ui.poolPick = null;
+  save();
+  renderSeatsPanel();
+}
+
+/** 座位上的同學拿下來放回名條區 */
+function moveToPool(seatId) {
+  const sid = state.assign[seatId];
+  if (!sid) return;
+  pushHistory();
+  delete state.assign[seatId];
+  state.pool.push(sid);
+  state.locked = state.locked.filter((x) => x !== sid);
+  save();
+  renderSeatsPanel();
+}
+
+function clearSeatsToPool() {
+  const locked = new Set(state.locked);
+  const take = seatOrder(state.seats).filter((x) => state.assign[x.id] && !locked.has(state.assign[x.id]));
+  if (!take.length) { toast('沒有可以拿下來的同學（鎖定的不會動）'); return; }
+  pushHistory();
+  const ids = take.map((x) => state.assign[x.id]);
+  take.forEach((x) => delete state.assign[x.id]);
+  state.pool = [...state.pool, ...ids].sort((a, b) => (Number(studentById(a)?.no) || 999) - (Number(studentById(b)?.no) || 999));
+  ui.selected = null; ui.selSeat = null; ui.poolPick = null;
+  save();
+  renderSeatsPanel();
+  toast(`已清空 ${ids.length} 個座位${locked.size ? '（鎖定的不動）' : ''}，名條在左邊`, 3500);
+}
+
 function swapSeats(a, b) {
   if (a === b) return;
   pushHistory();
@@ -3108,6 +3178,7 @@ function bindSeatsPanel() {
       toast(errs ? `已排座，但有 ${errs} 項規則無法同時滿足，請查看檢查結果` : '已依條件完成排座 ✓');
     }, 30);
   });
+  $('#btnClearSeats').addEventListener('click', clearSeatsToPool);
   $('#btnRandom').addEventListener('click', () => { askClearUsedFixed(); pushHistory(); optimize(false); save(); renderSeatsPanel(); toast('已隨機排座（鎖定的座位不變）'); });
   $('#btnUndo').addEventListener('click', () => {
     const h = ui.history.pop();
@@ -3166,6 +3237,22 @@ function bindSeatsPanel() {
   });
 
   let drag = null;
+  const pool = $('#pool');
+  pool.addEventListener('click', (e) => {
+    if (e.target.closest('#poolFill')) {
+      pushHistory();
+      state.pool = [];
+      ensureSeating(); save(); renderSeatsPanel();
+      return;
+    }
+  });
+  pool.addEventListener('pointerdown', (e) => {
+    const chip = e.target.closest('.pool-chip');
+    if (!chip || e.button > 0) return;
+    const rect = chip.getBoundingClientRect();
+    drag = { fromPool: chip.dataset.pool, desk: chip, moved: false, sx: e.clientX, sy: e.clientY, ox: e.clientX - rect.left, oy: e.clientY - rect.top };
+    e.preventDefault();
+  });
   room.addEventListener('pointerdown', (e) => {
     const desk = e.target.closest('.desk');
     if (!desk || e.button > 0 || e.target.closest('button') || isClean()) return;
@@ -3183,6 +3270,21 @@ function bindSeatsPanel() {
     if (!drag) return;
     const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
     if (!drag.moved && Math.hypot(dx, dy) < 5) return;
+    if (drag.fromPool) {
+      if (!drag.moved) {
+        drag.moved = true;
+        drag.ghost = drag.desk.cloneNode(true);
+        drag.ghost.classList.add('drag-ghost', 'pool-ghost');
+        document.body.appendChild(drag.ghost);
+        drag.desk.classList.add('dragging');
+      }
+      drag.ghost.style.left = e.clientX - drag.ox + 'px';
+      drag.ghost.style.top = e.clientY - drag.oy + 'px';
+      const target = document.elementFromPoint(e.clientX, e.clientY)?.closest('#room .desk');
+      $$('#room .drop-target').forEach((d) => d !== target && d.classList.remove('drop-target'));
+      if (target) target.classList.add('drop-target');
+      return;
+    }
     if (!drag.moved) {
       drag.moved = true;
       if (state.mode === 'swap') {
@@ -3210,8 +3312,22 @@ function bindSeatsPanel() {
     if (!drag) return;
     const d = drag;
     drag = null;
+    if (d.fromPool) {
+      if (!d.moved) {
+        // 點一下名條：選起來，再點座位放進去
+        if (e.type === 'pointerup') { ui.poolPick = ui.poolPick === d.fromPool ? null : d.fromPool; renderPool(); }
+        return;
+      }
+      d.ghost.remove();
+      d.desk.classList.remove('dragging');
+      $$('#room .drop-target').forEach((x) => x.classList.remove('drop-target'));
+      const hit = e.type === 'pointerup' ? document.elementFromPoint(e.clientX, e.clientY)?.closest('#room .desk') : null;
+      if (hit) placeFromPool(d.fromPool, hit.dataset.seat);
+      return;
+    }
     if (!d.moved) {
       const sid = state.assign[d.seatId];
+      if (e.type === 'pointerup' && ui.poolPick && state.pool.includes(ui.poolPick)) { placeFromPool(ui.poolPick, d.seatId); return; }
       if (e.type === 'pointerup') {
         if (ui.selSeat === d.seatId) { ui.selSeat = null; ui.selected = null; } else { ui.selSeat = d.seatId; ui.selected = sid || null; }
         renderRoom();
@@ -3225,7 +3341,9 @@ function bindSeatsPanel() {
       const hit = e.type === 'pointerup' ? document.elementFromPoint(e.clientX, e.clientY) : null;
       const target = hit?.closest('#room .desk');
       $$('#room .drop-target').forEach((x) => x.classList.remove('drop-target'));
-      if (target && target !== d.desk) {
+      if (hit?.closest('#pool') || (hit?.closest('.room-card') && !hit.closest('#roomWrap') && document.body.classList.contains('has-pool'))) {
+        moveToPool(d.seatId);
+      } else if (target && target !== d.desk) {
         swapSeats(d.seatId, target.dataset.seat);
       } else if (!target && hit?.closest('#room')) {
         // 拖到空白處：整個座位（連同學生）移過去
