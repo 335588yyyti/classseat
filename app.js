@@ -831,6 +831,17 @@ function evaluate() {
   if (prevSameSeat.length) items.push({ level: 'warn', text: `${prevN() > 1 ? `跟最近 ${prevN()} 次坐過的位子重複` : '跟上次坐同一個位子'}：${list(prevSameSeat)}` });
   if (prevStillL.length) items.push({ level: 'warn', text: `上次在左側、這次還在左側（建議換到右側）：${list(prevStillL)}` });
   if (prevStillR.length) items.push({ level: 'warn', text: `上次在右側、這次還在右側（建議換到左側）：${list(prevStillR)}` });
+  // 座位疊在一起：下面那張桌子（和坐在上面的人）會被蓋住看不到
+  for (let i = 0; i < seats.length; i++) {
+    for (let j = i + 1; j < seats.length; j++) {
+      if (overlaps(seats[i], seats[j])) {
+        const hidden = studentById(state.assign[seats[i].id]);
+        const top = studentById(state.assign[seats[j].id]);
+        items.push({ level: 'err', text: `有兩個座位疊在一起${hidden ? `，${name(hidden)} 被${top ? ` ${name(top)} ` : '空位'}蓋住了` : ''}。按座位表上方的「🔧 把疊住的座位分開」，或在座位上按右鍵刪除多的座位`, seat: seats[j].id });
+        errSeats.add(seats[j].id);
+      }
+    }
+  }
   // 每一組都要有男有女
   if (state.conditions.gender.on && geo.isGroups && geo.groupCount) {
     const byG = {};
@@ -1441,6 +1452,7 @@ function renderSeatsPanel() {
     }
   }
   renderPool(); // 先決定名條區在不在，教室才算得出可用寬度
+  renderRoomSummary();
   renderRoom();
   renderLegend();
   $('#btnSecret').classList.toggle('on', !!ui.secretMode);
@@ -1678,7 +1690,7 @@ function renderRoom() {
     ? ['拖到另一個座位＝互換', '拖到空白處＝移動座位', '點一下學生可查看條件，🔓 可鎖定']
     : ['拖曳桌子可自由調整位置'];
   if (canEditDesks()) tips.push('在空白處點兩下＝新增座位', '桌子左上角 × ＝刪除座位');
-  $('#roomHint').textContent = tips.join('；') + `。（${state.seats.length} 個座位、${empties} 個空位）`;
+  $('#roomHint').textContent = tips.join('；') + `。（${state.seats.length} 個座位、${state.students.length} 位學生、${empties} 個空位${state.pool?.length ? `、${state.pool.length} 位還在名條區` : ''}）`;
 
   renderChecks(ev);
   renderSelInfo();
@@ -3420,6 +3432,7 @@ function addDeskAt(x, y) {
   if (ui.newGroup === 'new' && group) ui.newGroup = group;
   const seat = { id: uid(), x, y, group };
   state.seats.push(seat);
+  nudgeFree(seat);
   // 有學生還沒座位時，直接坐進新座位
   const seated = new Set(Object.values(state.assign));
   const pooled = new Set(state.pool || []);
@@ -3538,6 +3551,72 @@ function renderPool() {
     <p class="hint pool-tip">拖到座位上；或點名條再點座位。座位上的人拖回這裡＝拿下來。</p>
     <div class="pool-list">${list.map((st) => `<div class="pool-chip ${st.gender ? 'g-' + st.gender : ''} ${ui.poolPick === st.id ? 'picked' : ''}" data-pool="${st.id}"><span class="d-no">${esc(st.no)}</span><span class="pc-name">${esc(st.name)}</span></div>`).join('')}</div>
     <div class="pool-actions"><button class="btn small" id="poolFill" ${empty ? '' : 'disabled'}>剩下的依座號放進空位</button></div>`;
+}
+
+const overlaps = (a, b) => Math.abs(a.x - b.x) < DESK_W * 0.6 && Math.abs(a.y - b.y) < DESK_H * 0.6;
+const tooClose = (a, b) => Math.abs(a.x - b.x) < DESK_W + 4 && Math.abs(a.y - b.y) < DESK_H + 6;
+/** 這個座位跟別的座位疊在一起：挪到附近最近的空處 */
+function nudgeFree(seat) {
+  const others = state.seats.filter((x) => x !== seat);
+  if (!others.some((o) => overlaps(o, seat))) return false;
+  const sx = DESK_W + 14, sy = DESK_H + 26;
+  let best = null;
+  for (let r = 1; r <= 8 && !best; r++) {
+    for (let dx = -r; dx <= r; dx++) {
+      for (let dy = -r; dy <= r; dy++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        const c = { x: seat.x + dx * sx, y: seat.y + dy * sy };
+        if (others.some((o) => tooClose(o, c))) continue;
+        const d = Math.hypot(dx * sx, dy * sy);
+        if (!best || d < best.d) best = { ...c, d };
+      }
+    }
+  }
+  if (!best) return false;
+  seat.x = Math.round(best.x); seat.y = Math.round(best.y);
+  return true;
+}
+function separateOverlaps() {
+  pushHistory();
+  let n = 0;
+  for (let i = 0; i < state.seats.length; i++) {
+    for (let j = i + 1; j < state.seats.length; j++) {
+      if (overlaps(state.seats[i], state.seats[j]) && nudgeFree(state.seats[j])) n++;
+    }
+  }
+  markDesksEdited(); save(); renderSeatsPanel();
+  toast(n ? `已把 ${n} 個疊住的座位移到旁邊，可以再拖到想要的位置` : '沒有疊在一起的座位');
+}
+
+/** 座位表上方的提醒：全班幾人、誰不在座位表上（沒座位、在名條區、被疊住的座位蓋住） */
+function renderRoomSummary() {
+  const el = $('#roomSummary');
+  if (!el) return;
+  const seats = state.seats;
+  const seated = new Set(Object.values(state.assign));
+  const hidden = [];
+  let nOver = 0;
+  for (let i = 0; i < seats.length; i++) {
+    for (let j = i + 1; j < seats.length; j++) {
+      if (overlaps(seats[i], seats[j])) {
+        nOver++;
+        const st = studentById(state.assign[seats[i].id]);
+        if (st) hidden.push(st);
+      }
+    }
+  }
+  const pooled = new Set(state.pool || []);
+  const noSeat = sortedStudents().filter((x) => !seated.has(x.id));
+  const tag = (x) => `${esc(x.no)}.${esc(x.name)}`;
+  const empties = seats.length - seated.size;
+  const parts = [`👥 全班 <b>${state.students.length}</b> 人`, `座位 ${seats.length} 個${empties > 0 ? `（${empties} 個空位）` : ''}`];
+  const missing = [
+    ...noSeat.map((x) => `${tag(x)}${pooled.has(x.id) ? '（在名條區）' : '（沒有座位）'}`),
+    ...hidden.map((x) => `${tag(x)}（座位被疊住，看不到）`),
+  ];
+  el.classList.toggle('warn', missing.length > 0);
+  el.innerHTML = parts.join('｜') + '｜' + (missing.length ? `⚠ 不在座位表上：${missing.join('、')}` : '✓ 每個人都在座位表上')
+    + (nOver ? ` <button class="btn small" data-fix-overlap>🔧 把疊住的座位分開</button>` : '');
 }
 
 /** 把名條區的同學放進座位；座位上原本有人就換到名條區 */
@@ -3701,6 +3780,7 @@ function bindSeatsPanel() {
     }, 30);
   });
   $('#btnClearSeats').addEventListener('click', clearSeatsToPool);
+  $('#roomSummary').addEventListener('click', (e) => { if (e.target.closest('[data-fix-overlap]')) separateOverlaps(); });
   $('#btnDelEmpty').addEventListener('click', deleteExtraDesks);
   $('#btnRandom').addEventListener('click', () => { askRememberCurrent(); askClearUsedFixed(); pushHistory(); optimize(false); save(); renderSeatsPanel(); toast('已隨機排座（鎖定的座位不變）'); });
   $('#btnUndo').addEventListener('click', () => {
@@ -3914,6 +3994,7 @@ function bindSeatsPanel() {
         pushHistory();
         seat.x = p.x;
         seat.y = p.y;
+        if (nudgeFree(seat)) toast('那裡已經有座位了，已放在旁邊');
         markDesksEdited();
         save();
         renderSeatsPanel();
@@ -3925,6 +4006,7 @@ function bindSeatsPanel() {
       pushHistory();
       seat.x = Math.round((seat.x + dx) / 8) * 8;
       seat.y = Math.round((seat.y + dy) / 8) * 8;
+      if (nudgeFree(seat)) toast('那裡已經有座位了，已放在旁邊');
       markDesksEdited();
       save();
       renderSeatsPanel();
