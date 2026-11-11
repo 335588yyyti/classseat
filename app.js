@@ -3408,10 +3408,10 @@ function deleteDesk(seatId) {
     toast(`${studentById(sid)?.name || '學生'} 回到名條區`);
   } else if (sid) {
     const empty = seatOrder(state.seats).find((s) => s.id !== seatId && !state.assign[s.id]);
-    if (!empty) { toast('座位不能少於學生人數；請先新增空位或減少人數'); return; }
     pushHistory();
-    state.assign[empty.id] = sid;
-    toast(`${studentById(sid)?.name || '學生'} 已移到空位`);
+    if (empty) state.assign[empty.id] = sid;
+    else { state.pool = [...(state.pool || []), sid]; state.locked = state.locked.filter((x) => x !== sid); }
+    toast(`${studentById(sid)?.name || '學生'} ${empty ? '已移到空位' : '沒有空位了，名條放在左邊'}`);
   } else {
     pushHistory();
   }
@@ -3703,6 +3703,44 @@ function bindSeatsPanel() {
       deleteDesk(desk.dataset.seat);
     }
   });
+  // 右鍵（手機長按）：鎖定／拿下來／刪除座位
+  const menu = document.createElement('div');
+  menu.className = 'desk-menu'; menu.hidden = true; menu.setAttribute('role', 'menu');
+  document.body.appendChild(menu);
+  const closeMenu = () => { menu.hidden = true; };
+  room.addEventListener('contextmenu', (e) => {
+    const desk = e.target.closest('.desk');
+    if (!desk || isClean() || ui.drawing) return;
+    e.preventDefault();
+    const seatId = desk.dataset.seat;
+    const sid = state.assign[seatId];
+    const st = studentById(sid);
+    const locked = sid && state.locked.includes(sid);
+    menu.innerHTML = `<div class="dm-title">${st ? `${esc(st.no)}. ${esc(st.name)}` : '空位'}</div>
+      ${st ? `<button data-dm="lock">${locked ? '🔓 解除鎖定' : '🔒 鎖定（自動排座時不動）'}</button>
+      <button data-dm="pool">🧺 拿下來放到名條區</button>` : ''}
+      <button data-dm="del" class="danger">🗑 刪除這個座位</button>`;
+    menu.hidden = false;
+    const r = menu.getBoundingClientRect();
+    menu.style.left = Math.min(e.clientX, innerWidth - r.width - 8) + 'px';
+    menu.style.top = Math.min(e.clientY, innerHeight - r.height - 8) + 'px';
+    menu.dataset.seat = seatId;
+  });
+  menu.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-dm]');
+    if (!b) return;
+    const seatId = menu.dataset.seat, sid = state.assign[seatId];
+    closeMenu();
+    if (b.dataset.dm === 'lock' && sid) {
+      pushHistory();
+      state.locked = state.locked.includes(sid) ? state.locked.filter((x) => x !== sid) : [...state.locked, sid];
+      save(); renderSeatsPanel();
+    } else if (b.dataset.dm === 'pool') moveToPool(seatId);
+    else if (b.dataset.dm === 'del') deleteDesk(seatId);
+  });
+  document.addEventListener('pointerdown', (e) => { if (!menu.hidden && !menu.contains(e.target)) closeMenu(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
+  window.addEventListener('scroll', closeMenu, true);
   room.addEventListener('dblclick', (e) => {
     if (!canEditDesks() || e.target.closest('.desk')) return;
     const r = room.getBoundingClientRect();
