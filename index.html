@@ -12,6 +12,7 @@
       <span class="logo" aria-hidden="true">▦</span>
       <input id="className" class="class-name" placeholder="班級名稱（例：三年二班）" aria-label="班級名稱">
       <button class="btn small cloud-btn" id="btnCloud">☁️ 雲端</button>
+      <select class="class-switch cloud-btn" id="classSwitch" aria-label="切換班級" hidden></select>
     </div>
     <nav class="tabs" role="tablist">
       <button class="tab" data-tab="students" role="tab">① 學生與條件</button>
@@ -108,6 +109,7 @@
         <button class="btn small secret-btn" id="btnSecret">說明</button>
         <button class="btn small" id="btnBig" title="投影給學生看：只顯示座位表">📺 大屏</button>
         <button class="btn small" id="btnImage" title="下載座位表圖片（PNG），可傳到 LINE">🖼 下載圖片</button>
+        <button class="btn small" id="btnPdf" title="下載 PDF：第 1 頁座位表、第 2 頁學生名單，適合列印或交給學校">📄 PDF</button>
         <button class="btn small" id="btnPrint">🖨 列印</button>
       </div>
     </section>
@@ -368,7 +370,7 @@
             <li><b>📌 記住這次座位：</b>存一筆座位紀錄（最多 10 次），同時下載一份備份檔。</li>
             <li><b>📚 紀錄／方案 →「過去的座位」：</b>看縮圖、放大、套用回座位表。</li>
             <li><b>「我的方案」：</b>把目前座位（可連同老師的安排）存成有名字的方案，之後一鍵載入。</li>
-            <li><b>🖼 下載圖片：</b>座位表存成圖片，可以傳到 LINE；<b>🖨 列印</b>也可以。</li>
+            <li><b>🖼 下載圖片：</b>座位表存成圖片，適合傳 LINE。<b>📄 PDF：</b>第 1 頁座位表、第 2 頁學生名單（座號、姓名、性別、組別），適合列印或交給學校，不會印出條件和老師的安排。</li>
             <li>按錯了可以按「↶ 復原」。</li>
           </ul>
         </details>
@@ -387,6 +389,8 @@
             <li>學校或別人的電腦用完，按「登出並清除這台的資料」。</li>
             <li><b>分享給其他老師：</b>給同一個網址就好。他們第一次打開會先建立自己的班級（自己的代碼和密碼），每個班級各自獨立，看不到也改不到你的班。</li>
             <li><b>抽籤專用連結：</b>在「☁️ 雲端」產生，用 LINE 傳給自己；學校大屏點開直接是抽籤畫面，沒有後台，抽完結果自動回到雲端。</li>
+            <li><b>🔑 救援碼：</b>建立班級時會給一組救援碼，請截圖存好。忘記老師密碼時，在「☁️ 雲端」按「忘記老師密碼？」用它重設。舊班級可以在「☁️ 雲端」產生。</li>
+            <li><b>好幾個班：</b>在「☁️ 雲端」按「＋ 登入或建立另一個班級」，之後右上角可以直接切換，不用重打密碼。</li>
           </ul>
         </details>
 

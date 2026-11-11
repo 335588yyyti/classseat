@@ -1,8 +1,8 @@
 rules_version = '2';
 
 // 教室座位安排（classseat）的 Firestore 安全規則
-// 只管 classseat_ 開頭的兩個集合；如果同一個 Firebase 專案還有其他系統（例如作業系統），
-// 請把下面兩個 match 區塊「加進」原本的規則裡，不要整份取代。
+// 只管 classseat_ 開頭的三個集合；如果同一個 Firebase 專案還有其他系統（例如作業系統），
+// 請把下面三個 match 區塊「加進」原本的規則裡，不要整份取代。
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -18,6 +18,18 @@ service cloud.firestore {
     }
 
     // 抽籤專用連結：文件代碼就是連結裡的亂數代碼（48 個字），知道連結才讀得到
+
+    // 救援碼：文件代碼是「班級代碼＋救援碼」的雜湊，知道救援碼才找得到；內容是加密過的
+    match /classseat_rescue/{rid} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if request.auth != null
+        && request.resource.data.owner == request.auth.uid
+        && request.auth.token.email == request.resource.data.code + '@classseat.local';
+      allow update: if request.auth != null && resource.data.owner == request.auth.uid
+        && request.resource.data.owner == resource.data.owner && request.resource.data.code == resource.data.code;
+      allow delete: if request.auth != null && resource.data.owner == request.auth.uid;
+    }
     match /classseat_draws/{drawId} {
       // 學校大屏：連結還沒過期就能讀取、存回抽籤結果（只能改這三個欄位）
       allow get: if resource.data.expiresAt > request.time;
