@@ -248,14 +248,15 @@ dialog.rule-dlg { width: min(720px, 96vw); }
 .seat-grp { margin: 10px 0 4px; padding: 8px 10px; background: var(--accent-soft); border-radius: 8px; font-size: 13.5px; }
 .desk .d-tag { width: 15px; height: 15px; border-radius: 4px; color: #fff; font-size: 10px; display: inline-flex; align-items: center; justify-content: center; flex: none; }
 .desk .lock {
-  position: absolute; top: 1px; right: 1px; border: 0; background: none; cursor: pointer;
-  font-size: 12px; padding: 2px; opacity: 0; line-height: 1;
+  position: absolute; top: -10px; right: -10px; z-index: 2; width: 24px; height: 24px; border-radius: 50%;
+  border: 1px solid var(--line); background: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center;
+  font-size: 14px; padding: 0; opacity: 0; line-height: 1; box-shadow: 0 1px 3px rgba(0,0,0,.12);
 }
 .desk:hover .lock, .desk.locked .lock { opacity: 1; }
 .desk.locked { background: #f1f5f9; }
 .desk:hover .del { opacity: 1; }
 
-.desk .del { position: absolute; top: -9px; left: -9px; opacity: 0; z-index: 2; width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--line); background: #fff; cursor: pointer; font-size: 12px; line-height: 1; padding: 0; color: var(--danger); }
+.desk .del { position: absolute; top: -10px; left: -10px; opacity: 0; z-index: 2; width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--line); background: #fff; cursor: pointer; font-size: 15px; font-weight: 700; line-height: 1; padding: 0; color: var(--danger); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
 .desk.conflict { box-shadow: 0 0 0 3px var(--danger); }
 .desk.warnd { box-shadow: 0 0 0 2px #e5b93a; }
 .desk.selected { box-shadow: 0 0 0 3px var(--accent); }
@@ -542,3 +543,11 @@ body.big-screen .pool, body.is-drawing .pool { display: none !important; }
 .class-switch { margin-left: 6px; padding: 4px 6px; border-radius: 8px; border: 1px solid var(--line); background: #fff; font-size: 13px; max-width: 150px; }
 .class-switch[hidden] { display: none; }
 body.big-screen .class-switch, body.is-drawing .class-switch { display: none !important; }
+
+/* 右鍵選單（座位） */
+.desk-menu { position: fixed; z-index: 1200; min-width: 170px; padding: 5px; background: #fff; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.18); display: flex; flex-direction: column; }
+.desk-menu[hidden] { display: none; }
+.desk-menu .dm-title { font-size: 12px; color: var(--muted); padding: 4px 10px 6px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.desk-menu button { text-align: left; background: none; border: 0; padding: 8px 10px; border-radius: 6px; font-size: 14px; cursor: pointer; color: inherit; }
+.desk-menu button:hover { background: var(--accent-soft); }
+.desk-menu button.danger { color: var(--danger); }
