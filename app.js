@@ -545,6 +545,19 @@ function buildModel() {
   const gender = studs.map((s) => s.gender || '');
   const hasBoth = gender.includes('M') && gender.includes('F');
 
+  // 上次的座位：不坐同一個位子、左右換邊（隨機排也遵守）
+  const hasPrev = !!((wPS && prevSeatSets.some((x) => x.size)) || (wPD && prevSide.some((x) => x === 'L' || x === 'R')));
+  function prevCost(occ, pos) {
+    if (!hasPrev) return 0;
+    let t = 0;
+    for (let i = 0; i < studs.length; i++) {
+      if (pos[i] < 0) continue;
+      if (wPS && prevSeatSets[i].has(pos[i])) t += wPS * 40;
+      if (wPD && (prevSide[i] === 'L' || prevSide[i] === 'R') && geo.sideCat[pos[i]] === prevSide[i]) t += wPD * 10;
+    }
+    return t;
+  }
+
   // 每一組都要有男有女（不能整組都是男生或都是女生）；隨機排也遵守
   function mixCost(occ) {
     const { isGroups, groupIdx, groupCount } = geo;
@@ -572,9 +585,8 @@ function buildModel() {
       if (p > 0) t += p * 10 * f;
       else if (p < 0) t += -p * 10 * (1 - f);
       if (wH && hTarget[i] >= 0) t += wH * 10 * Math.abs(f - hTarget[i]);
-      if (wPS && prevSeatSets[i].has(pos[i])) t += wPS * 40;
-      if (wPD && (prevSide[i] === 'L' || prevSide[i] === 'R') && geo.sideCat[pos[i]] === prevSide[i]) t += wPD * 10;
     }
+    t += prevCost(occ, pos);
     for (const [a, b] of avoidAdj) if (adj[pos[a] * N + pos[b]]) t += 1000;
     for (const [a, b] of avoidGroup) if (sameGroup(pos[a], pos[b])) t += 800;
     for (const [a, b] of preferGroup) if (!sameGroup(pos[a], pos[b])) t += 150;
@@ -622,7 +634,7 @@ function buildModel() {
     return t;
   }
 
-  return { geo, idx, cost, secretCost, mixCost, hasSecret: banList.length + apart.length > 0, hasMix: !!(wG && geo.isGroups && geo.groupCount && hasBoth) };
+  return { geo, idx, cost, secretCost, mixCost, prevCost, hasPrev, hasSecret: banList.length + apart.length > 0, hasMix: !!(wG && geo.isGroups && geo.groupCount && hasBoth) };
 }
 
 function optimize(useConditions = true, extraFixed = null, fixedOverride = null) {
@@ -681,9 +693,9 @@ function optimize(useConditions = true, extraFixed = null, fixedOverride = null)
     return Math.max(0, t - emptyIdeal) * 30;
   } : () => 0;
   // 完全隨機時只看老師的暗中安排；依條件時兩者都看
-  const costFn = useConditions ? (o, p) => model.cost(o, p) + model.secretCost(o, p) + emptyCost(o) : (o, p) => model.secretCost(o, p) + emptyCost(o) + model.mixCost(o);
+  const costFn = useConditions ? (o, p) => model.cost(o, p) + model.secretCost(o, p) + emptyCost(o) : (o, p) => model.secretCost(o, p) + emptyCost(o) + model.mixCost(o) + model.prevCost(o, p);
   let best = initial();
-  if ((useConditions || model.hasSecret || model.hasMix || nEmpty > 0) && movable.length > 1) {
+  if ((useConditions || model.hasSecret || model.hasMix || model.hasPrev || nEmpty > 0) && movable.length > 1) {
     let bestCost = costFn(best.occ, best.pos);
     const runs = useConditions ? 4 : 3, iters = useConditions ? 16000 : 8000;
     for (let r = 0; r < runs && !(bestCost === 0 && !useConditions); r++) {
@@ -715,6 +727,7 @@ function optimize(useConditions = true, extraFixed = null, fixedOverride = null)
   state.assign = {};
   state.pool = [];
   best.occ.forEach((st, si) => { if (st >= 0) state.assign[seats[si].id] = studs[st].id; });
+  state.autoHash = hashStr(JSON.stringify(state.assign));
   ui.secretStatus = secretViolations().length;
 }
 
@@ -883,8 +896,8 @@ function renderConditions() {
     ['myopia', '👓 視力', '近視坐前排', '近視的同學優先安排在前排'],
     ['height', '📏 身高', '矮前高後', '矮的同學坐前面、高的坐後面（填公分或選 矮／中矮／中／中高／高）'],
     ['gender', '⚥ 性別', '男生旁邊放女生、每組有男有女', '男生的左右兩旁盡量安排女生（女生旁邊不限制）；分組時每一組都要有男生也有女生'],
-    ['prevSeat', '🔁 換位子', '不坐坐過的位子', '不要坐最近幾次坐過的位子（在座位安排按「📌 記住這次座位」記錄，最多記 3 次）'],
-    ['prevSide', '↔ 左右換邊', '上次左側→換右側', '上次坐左側的換到右側、右側的換到左側；中間的不限（需先「📌 記住這次座位」）'],
+    ['prevSeat', '🔁 換位子', '不坐坐過的位子', '不要坐最近幾次坐過的位子（在座位安排按「📌 記住目前座位」記錄，最多記 3 次）'],
+    ['prevSide', '↔ 左右換邊', '上次左側→換右側', '上次坐左側的換到右側、右側的換到左側；中間的不限（以「📌 記住目前座位」為準）'],
   ];
   $('#builtinConds').innerHTML = defs.map(([k, title, short, desc]) => `
     <div class="cond ${c[k].on ? '' : 'off'}" title="${desc}">
@@ -1845,6 +1858,7 @@ const isClean = () => document.body.classList.contains('big-screen') || !!ui.dra
 
 function startDraw() {
   if (ui.drawing) return;
+  askRememberCurrent();
   ui.secretMode = false; // 抽籤時一定藏起老師的安排
   ui.selSeat = null; ui.selected = null;
   pushHistory();
@@ -2059,7 +2073,27 @@ function prevInfoText() {
   return `📌 上次座位：${fmtTime(state.prev.at)} 記錄${n > 1 ? `（共記住 ${n} 次）` : ''}`;
 }
 
-function rememberSeating() {
+/** 目前畫面上的座位跟「上次記住的」一樣嗎 */
+function sameAsPrev() {
+  const p = state.prev?.seats;
+  if (!p) return false;
+  const cur = Object.entries(state.assign);
+  return cur.length === Object.keys(p).length && cur.every(([seat, sid]) => p[sid]?.seatId === seat);
+}
+/**
+ * 按自動排座／隨機／抽籤之前：目前的座位是老師自己排的（不是剛剛自動排出來的）、還沒記住，
+ * 而且有開「換位子」或「左右換邊」→ 問一下要不要先記成目前座位，這次才會以它為準
+ */
+function askRememberCurrent() {
+  const c = state.conditions;
+  if (!(c.prevSeat?.on || c.prevSide?.on)) return;
+  if (cloud.session?.kiosk || document.body.classList.contains('big-screen')) return;
+  if ((state.pool || []).length || Object.keys(state.assign).length < state.students.length) return;
+  if (hashStr(JSON.stringify(state.assign)) === state.autoHash || sameAsPrev()) return;
+  if (confirm('目前畫面上的座位還沒記住。\n要先記成「目前座位」嗎？這次「換位子」「左右換邊」會以它為準。')) rememberSeating({ quiet: true });
+}
+
+function rememberSeating({ quiet = false } = {}) {
   const g = geometry();
   const seats = {};
   state.seats.forEach((s, i) => {
@@ -2071,10 +2105,13 @@ function rememberSeating() {
   // 舊的往後推，最多保留 3 次；同一份座位重複按只更新時間
   if (!same && state.prev?.seats) state.prevHistory = [state.prev, ...(state.prevHistory || [])].slice(0, MAX_RECORDS - 1);
   state.prev = { at: Date.now(), seats };
+  state.autoHash = '';
   save();
-  if (!cloud.session?.kiosk) exportData();
+  // 有登入雲端就不用每次下載備份檔
+  const backup = !quiet && !cloud.session;
+  if (backup) exportData();
   renderSeatsPanel();
-  toast(cloud.session?.kiosk ? '已記住這次座位' : '已記住這次座位（可在「📚 紀錄／方案」查看），備份檔也下載到「下載」資料夾了', 4000);
+  toast(cloud.session?.kiosk ? '已記住這次座位' : `已記住目前座位（可在「📚 紀錄／方案」查看）${backup ? '，備份檔也下載到「下載」資料夾了' : ''}`, 4000);
 }
 
 /** 下載資料備份（JSON） */
@@ -3115,7 +3152,7 @@ function renderRecords() {
   let html = '';
   if (tab === 'hist') {
     const recs = allRecords();
-    html = `<p class="hint">每按一次「📌 記住這次座位」就會存一筆在這裡（存在這台裝置的瀏覽器，最多 ${MAX_RECORDS} 次；用「💾 備份／搬移」可以帶到其他裝置）。排座條件「🔁 換位子」會參考最近 ${prevN()} 次。</p>`
+    html = `<p class="hint">每按一次「📌 記住目前座位」就會存一筆在這裡（存在這台裝置的瀏覽器，最多 ${MAX_RECORDS} 次；用「💾 備份／搬移」可以帶到其他裝置）。排座條件「🔁 換位子」會參考最近 ${prevN()} 次。</p>`
       + (recs.length ? recs.map((r, i) => {
         const { seats, assign } = recordToSeats(r);
         const label = i === 0 ? '最近一次' : `前 ${i + 1} 次`;
@@ -3124,7 +3161,7 @@ function renderRecords() {
           <div class="rec-info"><b>${label}</b><span class="hint">${fmtTime(r.at)}・${Object.keys(r.seats).length} 人</span>
             <div class="rec-actions"><button class="btn small" data-rec-zoom="${i}">放大看</button><button class="btn small" data-rec-apply="${i}">套用到座位表</button><button class="link-btn" data-rec-del="${i}">刪除</button></div></div>
         </div>`;
-      }).join('') : '<p class="empty-note">還沒有紀錄。座位排好或抽完籤後，按工具列的「📌 記住這次座位」。</p>');
+      }).join('') : '<p class="empty-note">還沒有紀錄。座位排好或抽完籤後，按工具列的「📌 記住目前座位」。</p>');
   } else {
     const plans = state.plans || [];
     html = `<p class="hint">把目前的座位存成方案，之後一鍵載入（例如「段考版」「分組討論版」）。勾選「連同老師的安排」會一起存下內定、不會抽到、不能坐隔壁的設定。</p>
@@ -3547,7 +3584,7 @@ function bindSeatsPanel() {
     startDraw();
   });
   $('#btnBig').addEventListener('click', () => setBigScreen(true));
-  $('#btnRemember').addEventListener('click', rememberSeating);
+  $('#btnRemember').addEventListener('click', () => rememberSeating());
   $('#bigExit').addEventListener('click', () => setBigScreen(false));
   $('#drawPad').addEventListener('click', (e) => {
     const b = e.target.closest('[data-draw-no]');
@@ -3599,6 +3636,7 @@ function bindSeatsPanel() {
     renderSeatsPanel();
   });
   $('#btnArrange').addEventListener('click', () => {
+    askRememberCurrent();
     askClearUsedFixed();
     pushHistory();
     const btn = $('#btnArrange');
@@ -3617,7 +3655,7 @@ function bindSeatsPanel() {
   });
   $('#btnClearSeats').addEventListener('click', clearSeatsToPool);
   $('#btnDelEmpty').addEventListener('click', deleteExtraDesks);
-  $('#btnRandom').addEventListener('click', () => { askClearUsedFixed(); pushHistory(); optimize(false); save(); renderSeatsPanel(); toast('已隨機排座（鎖定的座位不變）'); });
+  $('#btnRandom').addEventListener('click', () => { askRememberCurrent(); askClearUsedFixed(); pushHistory(); optimize(false); save(); renderSeatsPanel(); toast('已隨機排座（鎖定的座位不變）'); });
   $('#btnUndo').addEventListener('click', () => {
     const h = ui.history.pop();
     if (!h) return;
