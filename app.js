@@ -133,7 +133,14 @@ function normalize(data) {
 /* ---------- 雲端（Firebase）：班級代碼＋老師密碼 ---------- */
 // 把 Firebase 專案的設定貼在這裡（Firebase 主控台 → 專案設定 → 你的應用程式 → SDK 設定），雲端功能就會出現
 // 例：{ apiKey: '...', authDomain: '...firebaseapp.com', projectId: '...', appId: '...' }
-const FIREBASE_CONFIG = null;
+const FIREBASE_CONFIG = {
+  apiKey: 'AIzaSyAvD9tWYPTmh9Ty4X911goTnoCXLja3jrQ',
+  authDomain: 'homeworksystem-eca4b.firebaseapp.com',
+  projectId: 'homeworksystem-eca4b',
+  storageBucket: 'homeworksystem-eca4b.firebasestorage.app',
+  messagingSenderId: '652457196206',
+  appId: '1:652457196206:web:e5b1fe2f2d5d438ee48b3f',
+};
 const FB_CONFIG_KEY = 'classseat-firebase-config';
 const SESSION_KEY = 'classseat-session';
 const classKey = (code) => 'classseat-class:' + code;
@@ -1943,6 +1950,7 @@ const CLOUD_ERR = {
   notfound: '找不到這個班級代碼', wrongpass: '老師密碼不對', invalid: '班級代碼或老師密碼不對', locked: '嘗試太多次了，請過幾分鐘再試',
   session: '這台裝置的登入已失效（可能在別台改了密碼），請重新登入',
   kiosk: '這個抽籤連結已經失效或過期了，請老師重新產生一個',
+  noemail: 'Firebase 還沒開啟「電子郵件／密碼」登入（Authentication → 登入方式 → 新增供應商）',
   toolarge: '資料太大，無法存到雲端', server: '雲端發生錯誤', action: '雲端設定不正確', offline: '連不上雲端，請檢查網路',
 };
 const cloudErrText = (r) => CLOUD_ERR[r.error] || '連線失敗';
@@ -1974,6 +1982,7 @@ const fbErr = (e) => {
   if (/wrong-password/.test(c)) return 'wrongpass';
   if (/invalid-credential|invalid-login|invalid-email/.test(c)) return 'invalid';
   if (/too-many-requests/.test(c)) return 'locked';
+  if (/operation-not-allowed/.test(c)) return 'noemail';
   if (/weak-password/.test(c)) return 'key';
   if (/permission-denied|not-found/.test(c)) return 'session';
   if (/unavailable|network/.test(c)) return 'offline';
