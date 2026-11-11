@@ -69,6 +69,7 @@ function defaultState() {
       gender: { on: true, weight: 1 },
       prevSeat: { on: true, weight: 3, n: 1 },
       prevSide: { on: true, weight: 2 },
+      prevGroup: { on: true, weight: 2 },
       adjRange: 'gap', // 不可相鄰的範圍：touch 貼在一起、gap 隔一點也算、group 同一組也算
     },
     layout: { type: 'map', mapId: 'class', cols: 6, paired: true, groups: 6 },
@@ -561,11 +562,14 @@ function buildModel() {
     return t;
   }
 
-  // 上次的座位：不坐同一個位子、左右換邊（隨機排也遵守）
-  const hasPrev = !!((wPS && prevSeatSets.some((x) => x.size)) || (wPD && prevSide.some((x) => x === 'L' || x === 'R')));
+  // 上次的座位：不坐同一個位子、左右換邊、上次同組的分開（隨機排也遵守）
+  const wPG = c.prevGroup?.on ? WEIGHT_MUL[c.prevGroup.weight] : 0;
+  const prevMates = wPG ? prevGroupMates().map(([a, b]) => [idx.get(a), idx.get(b)]) : [];
+  const hasPrev = !!((wPS && prevSeatSets.some((x) => x.size)) || (wPD && prevSide.some((x) => x === 'L' || x === 'R')) || prevMates.length);
   function prevCost(occ, pos) {
     if (!hasPrev) return 0;
     let t = 0;
+    for (const [a, b] of prevMates) if (pos[a] >= 0 && pos[b] >= 0 && geo.sameGroup(pos[a], pos[b])) t += wPG * 12;
     for (let i = 0; i < studs.length; i++) {
       if (pos[i] < 0) continue;
       if (wPS && prevSeatSets[i].has(pos[i])) t += wPS * 40;
@@ -835,6 +839,14 @@ function evaluate() {
     }
   }
   const list = (a) => (a.length > 8 ? `${a.slice(0, 8).join('、')}…等 ${a.length} 人` : a.join('、'));
+  if (state.conditions.prevGroup?.on && state.prev?.seats) {
+    const again = prevGroupMates().filter(([a, b]) => seatIdxOf[a] !== undefined && seatIdxOf[b] !== undefined && geo.sameGroup(seatIdxOf[a], seatIdxOf[b]));
+    if (again.length) {
+      const nm2 = (id) => name(studentById(id));
+      items.push({ level: 'warn', text: `上次同組、這次又同組${again.length > 6 ? `（${again.length} 對）` : ''}：${again.slice(0, 6).map(([a, b]) => `${nm2(a)}＆${nm2(b)}`).join('、')}${again.length > 6 ? '…' : ''}` });
+      again.forEach(([a, b]) => { warnSeats.add(seats[seatIdxOf[a]].id); warnSeats.add(seats[seatIdxOf[b]].id); });
+    }
+  }
   if (prevSameSeat.length) items.push({ level: 'warn', text: `${prevN() > 1 ? `跟最近 ${prevN()} 次坐過的位子重複` : '跟上次坐同一個位子'}：${list(prevSameSeat)}` });
   if (prevStillL.length) items.push({ level: 'warn', text: `上次在左側、這次還在左側（建議換到右側）：${list(prevStillL)}` });
   if (prevStillR.length) items.push({ level: 'warn', text: `上次在右側、這次還在右側（建議換到左側）：${list(prevStillR)}` });
@@ -924,6 +936,7 @@ function renderConditions() {
     ['gender', '⚥ 性別', '男生旁邊放女生、每組有男有女', '男生的左右兩旁盡量安排女生（女生旁邊不限制）；分組時每一組都要有男生也有女生'],
     ['prevSeat', '🔁 換位子', '不坐坐過的位子', '不要坐最近幾次坐過的位子（在座位安排按「📌 記住目前座位」記錄，最多記 3 次）'],
     ['prevSide', '↔ 左右換邊', '上次左側→換右側', '上次坐左側的換到右側、右側的換到左側；中間的不限（以「📌 記住目前座位」為準）'],
+    ['prevGroup', '👥 換組員', '上次同組的盡量分開', '上次同一組的同學（不是分組時看上次坐在旁邊的），這次盡量不要再同組（以「📌 記住目前座位」為準）'],
   ];
   $('#builtinConds').innerHTML = defs.map(([k, title, short, desc]) => `
     <div class="cond ${c[k].on ? '' : 'off'}" title="${desc}">
@@ -2144,6 +2157,25 @@ function prevInfoText() {
   return `📌 上次座位：${fmtTime(state.prev.at)} 記錄${n > 1 ? `（共記住 ${n} 次）` : ''}`;
 }
 
+/** 上次同一組的同學（記錄裡有組別就看組別，沒有就看是不是坐在旁邊）→ [[學生id, 學生id], …] */
+function prevGroupMates() {
+  const pv = state.prev?.seats;
+  if (!pv) return [];
+  const ids = new Set(state.students.map((x) => x.id));
+  const ent = Object.entries(pv).filter(([sid]) => ids.has(sid));
+  const grp = (v) => v.group ?? state.seats.find((x) => x.id === v.seatId)?.group ?? null;
+  const out = [];
+  for (let i = 0; i < ent.length; i++) {
+    for (let j = i + 1; j < ent.length; j++) {
+      const [a, va] = ent[i], [b, vb] = ent[j];
+      const ga = grp(va), gb = grp(vb);
+      const same = ga && gb ? ga === gb : (Math.abs(va.x - vb.x) < DESK_W * 1.3 && Math.abs(va.y - vb.y) < DESK_H * 1.6);
+      if (same) out.push([a, b]);
+    }
+  }
+  return out;
+}
+
 /** 目前畫面上的座位跟「上次記住的」一樣嗎 */
 function sameAsPrev() {
   const p = state.prev?.seats;
@@ -2157,7 +2189,7 @@ function sameAsPrev() {
  */
 function askRememberCurrent() {
   const c = state.conditions;
-  if (!(c.prevSeat?.on || c.prevSide?.on)) return;
+  if (!(c.prevSeat?.on || c.prevSide?.on || c.prevGroup?.on)) return;
   if (cloud.session?.kiosk || document.body.classList.contains('big-screen')) return;
   if ((state.pool || []).length || Object.keys(state.assign).length < state.students.length) return;
   if (hashStr(JSON.stringify(state.assign)) === state.autoHash || sameAsPrev()) return;
@@ -2169,7 +2201,7 @@ function rememberSeating({ quiet = false } = {}) {
   const seats = {};
   state.seats.forEach((s, i) => {
     const st = state.assign[s.id];
-    if (st) seats[st] = { seatId: s.id, x: s.x, y: s.y, side: g.sideCat[i] };
+    if (st) seats[st] = { seatId: s.id, x: s.x, y: s.y, side: g.sideCat[i], group: s.group || null };
   });
   const same = state.prev?.seats && Object.keys(seats).length === Object.keys(state.prev.seats).length
     && Object.entries(seats).every(([k, v]) => state.prev.seats[k]?.seatId === v.seatId);
