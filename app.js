@@ -878,7 +878,7 @@ function renderTable() {
         <span class="sc-or">或</span>
         <label class="sc-height"><input type="number" min="80" max="220" placeholder="公分" value="${esc(s.height)}" data-f="height" aria-label="身高（公分）">cm</label>
       </div>
-      <input class="sc-note" type="text" value="${esc(s.note)}" placeholder="備註…" data-f="note" aria-label="備註">
+      <input class="sc-note" type="text" value="${esc(s.note)}" placeholder="備註…（也可以寫「不要跟24號坐」）" data-f="note" aria-label="備註">
       <div class="sc-foot">
         <div class="sc-sum">${summaryHtml(s)}</div>
         <button class="sc-edit" data-open-rules>條件設定 ›</button>
@@ -941,6 +941,57 @@ function renderRuleDialog() {
 }
 
 /**
+ * 一段「同學關係」的寫法 → [[key, 對象], …]；看不懂回傳 null
+ *   不要跟24坐、不要跟王小明同組、不要跟24同組附近、跟5號同組、不相鄰:3/7
+ */
+const NEAR_WORDS = '坐|相鄰|坐隔壁|隔壁|坐一起|坐在一起|附近|旁邊|靠近|坐附近|坐旁邊|前後左右|坐近';
+function matchRelation(tk) {
+  let m;
+  if ((m = tk.match(/^(?:不相鄰|不可相鄰|不要相鄰)[:：](.+)$/))) return [['avoidAdj', m[1]]];
+  if ((m = tk.match(/^(?:不同組|不可同組|不要同組)[:：](.+)$/))) return [['avoidGroup', m[1]]];
+  if ((m = tk.match(/^(?:同組|盡量同組|要同組)[:：](.+)$/))) return [['preferGroup', m[1]]];
+  // 不要跟24同組附近／同組或附近／同組也不要坐旁邊 → 不可同組＋不可相鄰
+  if ((m = tk.match(new RegExp(`^不(?:要|可|能|可以)?(?:跟|和|與)(.+?)同組(?:或|和|也不要|也不能|、)?(?:${NEAR_WORDS})$`)))) return [['avoidGroup', m[1]], ['avoidAdj', m[1]]];
+  if ((m = tk.match(new RegExp(`^不(?:要|可|能|可以)?(?:跟|和|與)(.+?)(?:${NEAR_WORDS})(?:或|和|也不要|也不能|、)?同組$`)))) return [['avoidGroup', m[1]], ['avoidAdj', m[1]]];
+  if ((m = tk.match(/^不(?:要|可|能|可以)?(?:跟|和|與)(.+?)同組$/))) return [['avoidGroup', m[1]]];
+  if ((m = tk.match(new RegExp(`^不(?:要|可|能|可以)?(?:跟|和|與)(.+?)(?:${NEAR_WORDS})$`)))) return [['avoidAdj', m[1]]];
+  if ((m = tk.match(/^(?:要|想|盡量)?(?:跟|和|與)(.+?)(?:同組|一組|坐一起|坐在一起)$/))) return [['preferGroup', m[1]]];
+  return null;
+}
+
+/** 名字或座號 → 學生 */
+function findStudentRef(q, list = state.students) {
+  const t = q.replace(/號$/, '').trim();
+  return list.find((x) => x.name === t) || (/^\d+$/.test(t) ? list.find((x) => String(x.no) === t) : null) || list.find((x) => x.name.includes(t) && t.length >= 2);
+}
+
+const REL_LABEL = { avoidAdj: '不可相鄰', avoidGroup: '不可同組', preferGroup: '盡量同組' };
+
+/** 學生卡片的備註裡寫了同學關係，就直接設定好，並從備註拿掉 */
+function applyNoteRelations(s) {
+  const parts = String(s.note || '').split(/([\s,，、;；。]+)/);
+  const done = [], warn = [];
+  const keep = parts.map((p) => {
+    const rels = p.trim() && matchRelation(p.trim());
+    if (!rels) return p;
+    const hits = [];
+    let bad = false;
+    for (const [key, whoStr] of rels) {
+      for (const w of whoStr.split(/[\/／+＋]/).map((x) => x.trim()).filter(Boolean)) {
+        const o = findStudentRef(w);
+        if (!o || o.id === s.id) { bad = true; warn.push(w); continue; }
+        hits.push([key, o]);
+      }
+    }
+    if (bad) return p;
+    hits.forEach(([key, o]) => { setRelation(s.id, o.id, key, true); done.push(`${REL_LABEL[key]} ${o.no}.${o.name}`); });
+    return '';
+  });
+  if (done.length) s.note = keep.join('').replace(/^[\s,，、;；。]+|[\s,，、;；。]+$/g, '').replace(/([\s,，、;；。])[\s,，、;；。]+/g, '$1');
+  return { done, warn: [...new Set(warn)] };
+}
+
+/**
  * 解析批次貼上的一行，可以寫：
  *   開頭的數字＝座號；第一個看不懂的詞＝姓名，之後看不懂的詞放進備註
  *   男／女、近視、身高（公分或 矮／中矮／中／中高／高）
@@ -971,12 +1022,7 @@ function parseStudentLine(line, defaultNo, newTags = []) {
     else if (/^(後排|坐後排|坐後面|靠後|盡量後排|後面)$/.test(tk)) st.pref = 'back';
     else if (/^(外側|靠外側|靠窗|靠邊|盡量外側)$/.test(tk)) st.hpref = 'outer';
     else if (/^(中間|靠中間|盡量中間)$/.test(tk)) st.hpref = 'center';
-    else if ((m = tk.match(/^(?:不相鄰|不可相鄰|不要相鄰)[:：](.+)$/))) addRel('avoidAdj', m[1]);
-    else if ((m = tk.match(/^(?:不同組|不可同組|不要同組)[:：](.+)$/))) addRel('avoidGroup', m[1]);
-    else if ((m = tk.match(/^(?:同組|盡量同組|要同組)[:：](.+)$/))) addRel('preferGroup', m[1]);
-    else if ((m = tk.match(/^不(?:要|可|能|可以)?(?:跟|和|與)(.+?)同組$/))) addRel('avoidGroup', m[1]);
-    else if ((m = tk.match(/^不(?:要|可|能|可以)?(?:跟|和|與)(.+?)(?:坐|相鄰|坐隔壁|隔壁|坐一起|坐在一起)$/))) addRel('avoidAdj', m[1]);
-    else if ((m = tk.match(/^(?:要|想|盡量)?(?:跟|和|與)(.+?)(?:同組|一組|坐一起|坐在一起)$/))) addRel('preferGroup', m[1]);
+    else if ((m = matchRelation(tk))) m.forEach(([key, who]) => addRel(key, who));
     else if ((m = tk.match(/^備註[:：](.+)$/))) notes.push(m[1]);
     else if ((m = tk.match(/^[#＃](.+)$/)) || findTag(tk)) {
       const name = m ? m[1] : tk;
@@ -1066,6 +1112,13 @@ function bindStudentsPanel() {
   });
   grid.addEventListener('change', (e) => {
     const card = cardOf(e.target);
+    if (card && e.target.dataset.f === 'note') {
+      const s = studentById(card.dataset.sid);
+      const { done, warn } = applyNoteRelations(s);
+      if (done.length) { afterStudentsChanged(); toast(`${s.name}：已設定 ${done.join('、')}`, 4000); }
+      if (warn.length) toast(`${s.name}：找不到「${warn.join('、')}」，請寫名字或座號`, 4000);
+      return;
+    }
     if (!card || e.target.dataset.f !== 'myopia') return;
     studentById(card.dataset.sid).myopia = e.target.checked;
     e.target.closest('.sc-pill').classList.toggle('on', e.target.checked);
@@ -1229,10 +1282,7 @@ function bindStudentsPanel() {
     state.students = list;
     // 第二輪：把「不要跟誰坐」「跟誰同組」對到名單上的同學（名字或座號）
     const warn = [];
-    const findStu = (q) => {
-      const t = q.replace(/號$/, '').trim();
-      return list.find((x) => x.name === t) || (/^\d+$/.test(t) ? list.find((x) => String(x.no) === t) : null) || list.find((x) => x.name.includes(t) && t.length >= 2);
-    };
+    const findStu = (q) => findStudentRef(q, list);
     let ruleN = 0;
     parsed.forEach(({ st, rels }) => {
       for (const [key, who] of rels) {
