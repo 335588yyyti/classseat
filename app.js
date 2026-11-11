@@ -545,6 +545,15 @@ function buildModel() {
   const gender = studs.map((s) => s.gender || '');
   const hasBoth = gender.includes('M') && gender.includes('F');
 
+  // 必須遵守的同學關係：不可相鄰、不可同組（隨機排也遵守）
+  function hardCost(occ, pos) {
+    let t = 0;
+    const { adj, N, sameGroup } = geo;
+    for (const [a, b] of avoidAdj) if (pos[a] >= 0 && pos[b] >= 0 && adj[pos[a] * N + pos[b]]) t += 1000;
+    for (const [a, b] of avoidGroup) if (pos[a] >= 0 && pos[b] >= 0 && sameGroup(pos[a], pos[b])) t += 800;
+    return t;
+  }
+
   // 上次的座位：不坐同一個位子、左右換邊（隨機排也遵守）
   const hasPrev = !!((wPS && prevSeatSets.some((x) => x.size)) || (wPD && prevSide.some((x) => x === 'L' || x === 'R')));
   function prevCost(occ, pos) {
@@ -587,8 +596,7 @@ function buildModel() {
       if (wH && hTarget[i] >= 0) t += wH * 10 * Math.abs(f - hTarget[i]);
     }
     t += prevCost(occ, pos);
-    for (const [a, b] of avoidAdj) if (adj[pos[a] * N + pos[b]]) t += 1000;
-    for (const [a, b] of avoidGroup) if (sameGroup(pos[a], pos[b])) t += 800;
+    t += hardCost(occ, pos);
     for (const [a, b] of preferGroup) if (!sameGroup(pos[a], pos[b])) t += 150;
 
     // 性別：男生左右兩旁盡量是女生（女生旁邊不限制）
@@ -634,7 +642,7 @@ function buildModel() {
     return t;
   }
 
-  return { geo, idx, cost, secretCost, mixCost, prevCost, hasPrev, hasSecret: banList.length + apart.length > 0, hasMix: !!(wG && geo.isGroups && geo.groupCount && hasBoth) };
+  return { geo, idx, cost, secretCost, mixCost, prevCost, hardCost, hasHard: avoidAdj.length + avoidGroup.length > 0, hasPrev, hasSecret: banList.length + apart.length > 0, hasMix: !!(wG && geo.isGroups && geo.groupCount && hasBoth) };
 }
 
 function optimize(useConditions = true, extraFixed = null, fixedOverride = null) {
@@ -693,9 +701,9 @@ function optimize(useConditions = true, extraFixed = null, fixedOverride = null)
     return Math.max(0, t - emptyIdeal) * 30;
   } : () => 0;
   // 完全隨機時只看老師的暗中安排；依條件時兩者都看
-  const costFn = useConditions ? (o, p) => model.cost(o, p) + model.secretCost(o, p) + emptyCost(o) : (o, p) => model.secretCost(o, p) + emptyCost(o) + model.mixCost(o) + model.prevCost(o, p);
+  const costFn = useConditions ? (o, p) => model.cost(o, p) + model.secretCost(o, p) + emptyCost(o) : (o, p) => model.secretCost(o, p) + emptyCost(o) + model.mixCost(o) + model.prevCost(o, p) + model.hardCost(o, p);
   let best = initial();
-  if ((useConditions || model.hasSecret || model.hasMix || model.hasPrev || nEmpty > 0) && movable.length > 1) {
+  if ((useConditions || model.hasSecret || model.hasMix || model.hasPrev || model.hasHard || nEmpty > 0) && movable.length > 1) {
     let bestCost = costFn(best.occ, best.pos);
     const runs = useConditions ? 4 : 3, iters = useConditions ? 16000 : 8000;
     for (let r = 0; r < runs && !(bestCost === 0 && !useConditions); r++) {
@@ -1744,7 +1752,7 @@ function renderSecret() {
       <div class="sec-row"><span>怎麼抽</span>${optRow('mode', [['cond', '依條件'], ['random', '完全隨機']])}</div>
       <div class="sec-row"><span>搖籤時間</span>${optRow('speed', [['fast', '短'], ['mid', '普通'], ['slow', '長']])}</div>
       <div class="sec-row"><span>音效</span>${optRow('sound', [['on', '開'], ['off', '關']])}</div>
-      <p class="hint">「依條件」會遵守不可相鄰、身高、視力等設定；「完全隨機」只遵守下面的安排。按「抽籤」後，學生選自己的座號、搖籤筒，就會抽到照這些設定安排好的座位。</p>
+      <p class="hint">「依條件」會遵守所有排座條件（身高、視力、偏好…）；「完全隨機」只遵守不可相鄰、不可同組、換位子、每組男女和下面的安排，其他隨機。按「抽籤」後，學生選自己的座號、搖籤筒，就會抽到照這些設定安排好的座位。</p>
     </div>
     ${status}
     <div class="sec-block">
