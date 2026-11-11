@@ -570,3 +570,10 @@ body.big-screen .room-summary, body.is-drawing .room-summary { display: none; }
 /* 老師畫面上測試抽籤：設定面板留著 */
 body.is-drawing.draw-test .side { display: flex !important; flex-direction: column; gap: 12px; margin-top: 12px; }
 .draw-test-note { margin: 0 0 8px; padding: 6px 10px; border-radius: 8px; background: #eef2ff; color: #3730a3; font-size: 12.5px; }
+
+/* 右鍵選單的組別列、分組刷 */
+.desk-menu .dm-groups { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; padding: 6px 8px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); margin: 4px 0; font-size: 12px; color: var(--muted); }
+.desk-menu .dm-groups button { min-width: 30px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; text-align: center; font-size: 13px; }
+.desk-menu .dm-groups button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.grp-pick.brush.on { background: #fff4e5; border-radius: 8px; padding: 2px 6px; color: #8a4b00; font-weight: 600; }
+.room.brush-mode .desk { cursor: crosshair; }

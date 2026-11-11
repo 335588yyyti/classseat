@@ -1459,6 +1459,11 @@ function renderSeatsPanel() {
   $('#editTools').hidden = !canEditDesks();
   if (ui.newGroup !== 'auto' && ui.newGroup !== 'new' && ui.newGroup !== 'none' && !groupKeys().includes(ui.newGroup)) ui.newGroup = 'auto';
   $('#newDeskGroup').innerHTML = groupOptions(ui.newGroup, true);
+  if (ui.groupBrush && ui.groupBrush !== 'new' && !groupKeys().includes(ui.groupBrush)) ui.groupBrush = null;
+  if (!canEditDesks()) ui.groupBrush = null;
+  $('#groupBrush').innerHTML = `<option value="">關</option>${groupKeys().map((k) => `<option value="${k}" ${ui.groupBrush === k ? 'selected' : ''}>第 ${groupNum(k)} 組</option>`).join('')}<option value="new" ${ui.groupBrush === 'new' ? 'selected' : ''}>＋ 新的一組</option><option value="none" ${ui.groupBrush === 'none' ? 'selected' : ''}>不分組</option>`;
+  $('#groupBrushLabel').classList.toggle('on', !!ui.groupBrush);
+  $('#room').classList.toggle('brush-mode', !!ui.groupBrush);
   $('#btnResetDesks').hidden = isTemplate();
   $('#btnFlip').textContent = state.flipped ? '視角：講台在下（老師）' : '視角：講台在上（學生）';
   $('#btnUndo').disabled = !ui.history.length;
@@ -3481,6 +3486,21 @@ function groupOptions(current, withAuto) {
     + groupKeys().map((k) => opt(k, `第 ${groupNum(k)} 組`)).join('')
     + opt('new', '＋ 新的一組') + opt('none', '不分組');
 }
+/** 設定一個座位的組別（choice：G# / new / none） */
+function setSeatGroup(seatId, choice, { quiet = false } = {}) {
+  const seat = state.seats.find((x) => x.id === seatId);
+  if (!seat) return null;
+  const g = resolveGroup(choice, seat.x, seat.y);
+  if (seat.group === g) return g;
+  pushHistory();
+  seat.group = g;
+  markDesksEdited();
+  save();
+  renderSeatsPanel();
+  if (!quiet) toast(g ? `已改到第 ${groupNum(g)} 組` : '已設為不分組');
+  return g;
+}
+
 /** 把選項（auto / new / none / G#）換成實際組別 */
 function resolveGroup(choice, x, y) {
   if (choice === 'none') return null;
@@ -3886,6 +3906,12 @@ function bindSeatsPanel() {
   });
 
   $('#newDeskGroup').addEventListener('change', (e) => { ui.newGroup = e.target.value; });
+  $('#groupBrush').addEventListener('change', (e) => {
+    ui.groupBrush = e.target.value || null;
+    renderSeatsPanel();
+    if (ui.groupBrush) toast('分組刷開啟：點座位就改成這一組。按 Esc 或選「關」結束', 3500);
+  });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && ui.groupBrush) { ui.groupBrush = null; renderSeatsPanel(); } });
   $('#selInfo').addEventListener('change', (e) => {
     if (!('seatGroup' in e.target.dataset)) return;
     const seat = state.seats.find((x) => x.id === ui.selSeat);
@@ -3926,6 +3952,7 @@ function bindSeatsPanel() {
     menu.innerHTML = `<div class="dm-title">${st ? `${esc(st.no)}. ${esc(st.name)}` : '空位'}</div>
       ${st ? `<button data-dm="lock">${locked ? '🔓 解除鎖定' : '🔒 鎖定（自動排座時不動）'}</button>
       <button data-dm="pool">🧺 拿下來放到名條區</button>` : ''}
+      <div class="dm-groups"><span>組別</span>${groupKeys().map((k) => `<button data-dm-group="${k}" class="${state.seats.find((x) => x.id === seatId)?.group === k ? 'on' : ''}">${groupNum(k)}</button>`).join('')}<button data-dm-group="new" title="新的一組">＋</button><button data-dm-group="none" title="不分組">不分</button></div>
       <button data-dm="del" class="danger">🗑 刪除這個座位</button>`;
     menu.hidden = false;
     const r = menu.getBoundingClientRect();
@@ -3934,6 +3961,8 @@ function bindSeatsPanel() {
     menu.dataset.seat = seatId;
   });
   menu.addEventListener('click', (e) => {
+    const gb = e.target.closest('[data-dm-group]');
+    if (gb) { closeMenu(); setSeatGroup(menu.dataset.seat, gb.dataset.dmGroup); return; }
     const b = e.target.closest('[data-dm]');
     if (!b) return;
     const seatId = menu.dataset.seat, sid = state.assign[seatId];
@@ -4049,6 +4078,12 @@ function bindSeatsPanel() {
     if (!d.moved) {
       const sid = state.assign[d.seatId];
       if (e.type === 'pointerup' && ui.poolPick && state.pool.includes(ui.poolPick)) { placeFromPool(ui.poolPick, d.seatId); return; }
+      if (e.type === 'pointerup' && ui.groupBrush) {
+        // 分組刷：點到的座位改成這一組；選「新的一組」時，第一下建立新組，之後都刷這組
+        const g = setSeatGroup(d.seatId, ui.groupBrush, { quiet: true });
+        if (ui.groupBrush === 'new' && g) { ui.groupBrush = g; renderSeatsPanel(); }
+        return;
+      }
       if (e.type === 'pointerup') {
         if (ui.selSeat === d.seatId) { ui.selSeat = null; ui.selected = null; } else { ui.selSeat = d.seatId; ui.selected = sid || null; }
         renderRoom();
