@@ -654,10 +654,19 @@ function optimize(useConditions = true, extraFixed = null, fixedOverride = null)
     return { occ, pos };
   }
 
+  // 座位比學生多：空位盡量留在最後面（以「最理想的空位位置」為 0 分）
+  const fr = geometry(seats).front;
+  const nEmpty = movable.length - free.length;
+  const emptyIdeal = nEmpty > 0 ? movable.map((i) => 1 - fr[i]).sort((x, y) => x - y).slice(0, nEmpty).reduce((x, y) => x + y, 0) : 0;
+  const emptyCost = nEmpty > 0 ? (o) => {
+    let t = 0;
+    for (const i of movable) if (o[i] < 0) t += 1 - fr[i];
+    return Math.max(0, t - emptyIdeal) * 30;
+  } : () => 0;
   // 完全隨機時只看老師的暗中安排；依條件時兩者都看
-  const costFn = useConditions ? (o, p) => model.cost(o, p) + model.secretCost(o, p) : model.secretCost;
+  const costFn = useConditions ? (o, p) => model.cost(o, p) + model.secretCost(o, p) + emptyCost(o) : (o, p) => model.secretCost(o, p) + emptyCost(o);
   let best = initial();
-  if ((useConditions || model.hasSecret) && movable.length > 1) {
+  if ((useConditions || model.hasSecret || nEmpty > 0) && movable.length > 1) {
     let bestCost = costFn(best.occ, best.pos);
     const runs = useConditions ? 4 : 3, iters = useConditions ? 16000 : 8000;
     for (let r = 0; r < runs && !(bestCost === 0 && !useConditions); r++) {
