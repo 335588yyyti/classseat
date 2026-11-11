@@ -78,6 +78,7 @@ function defaultState() {
     drawOpts: { mode: 'cond', order: 'front', speed: 'mid', sound: 'on' },
     seats: [],
     assign: {}, // seatId -> studentId
+    pool: [], // 還沒放進座位的名條（老師一個一個放）
     locked: [], // studentIds
     flipped: false,
     custom: false,
@@ -126,6 +127,7 @@ function normalize(data) {
   delete s.customLayout;
   delete s.freeLayout;
   s.assign = data.assign && typeof data.assign === 'object' ? data.assign : {};
+  s.pool = Array.isArray(data.pool) ? data.pool : [];
   s.locked = Array.isArray(data.locked) ? data.locked : [];
   return s;
 }
@@ -188,12 +190,39 @@ let saveTimer = null;
 function save() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
+    saveTimer = null;
     const json = JSON.stringify(state);
     try { store().setItem(storeKey(), json); } catch { /* 無痕模式等情況 */ }
     // 登入雲端班級時，資料有變就排程上傳
     if (cloud.session && hashStr(json) !== cloud.session.syncedHash) scheduleCloudSave();
   }, 200);
 }
+
+/** 按「💾 儲存」：馬上存到這台，有登入雲端也馬上上傳 */
+async function saveNow() {
+  clearTimeout(saveTimer);
+  const json = JSON.stringify(state);
+  let okLocal = true;
+  try { store().setItem(storeKey(), json); } catch { okLocal = false; }
+  const stamp = (t) => { const el = $('#saveStamp'); if (el) el.textContent = t; };
+  const hm = new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false });
+  if (cloud.session && !cloud.session.kiosk && !cloud.session.expired) {
+    toast('儲存中…');
+    clearTimeout(cloud.timer); cloud.timer = null;
+    await cloudSave(true);
+    if (cloud.status === 'ok') { toast(`✓ 已儲存到雲端（${cloud.session.code}）`); stamp(`✓ ${hm} 已存到雲端`); }
+    else { toast(okLocal ? '已存在這台，雲端還沒存到，連上網路後會自動上傳' : '儲存失敗', 4000); stamp(okLocal ? `${hm} 已存在這台` : ''); }
+  } else if (okLocal) {
+    toast('✓ 已儲存在這台電腦（建議偶爾按「💾 備份／搬移」備份）', 3500); stamp(`✓ ${hm} 已儲存`);
+  } else toast('這個瀏覽器不能儲存（可能是無痕視窗），請用「💾 備份／搬移」', 4000);
+}
+
+// 關掉或重新整理網頁時，把還沒寫進去的修改馬上存好
+window.addEventListener('pagehide', () => {
+  if (!saveTimer) return;
+  clearTimeout(saveTimer); saveTimer = null;
+  try { store().setItem(storeKey(), JSON.stringify(state)); } catch { /* ignore */ }
+});
 
 const ui = { selected: null, selSeat: null, newGroup: 'auto', scale: 1, history: [] };
 
@@ -206,7 +235,7 @@ function toast(msg, ms = 2200) {
 }
 
 function pushHistory() {
-  ui.history.push(JSON.stringify({ seats: state.seats, assign: state.assign, locked: state.locked, layout: state.layout, custom: state.custom, maps: state.maps, secret: state.secret }));
+  ui.history.push(JSON.stringify({ seats: state.seats, assign: state.assign, pool: state.pool, locked: state.locked, layout: state.layout, custom: state.custom, maps: state.maps, secret: state.secret }));
   if (ui.history.length > 30) ui.history.shift();
 }
 
@@ -373,7 +402,10 @@ function ensureSeating() {
     if (state.seats.length !== expected || !state.seats.length) { relayout(); return; }
   }
   const seated = new Set(Object.values(state.assign));
-  const unseated = sortedStudents().filter((s) => !seated.has(s.id));
+  // 名條區：只留還在名單上、還沒坐下的人
+  state.pool = [...new Set(state.pool || [])].filter((id) => ids.has(id) && !seated.has(id));
+  const waiting = new Set(state.pool);
+  const unseated = sortedStudents().filter((s) => !seated.has(s.id) && !waiting.has(s.id));
   if (!unseated.length) return;
   let empty = seatOrder(state.seats).filter((s) => !state.assign[s.id]);
   if (empty.length < unseated.length) {
@@ -641,6 +673,7 @@ function optimize(useConditions = true, extraFixed = null, fixedOverride = null)
     }
   }
   state.assign = {};
+  state.pool = [];
   best.occ.forEach((st, si) => { if (st >= 0) state.assign[seats[si].id] = studs[st].id; });
   ui.secretStatus = secretViolations().length;
 }
@@ -878,7 +911,7 @@ function renderTable() {
         <span class="sc-or">或</span>
         <label class="sc-height"><input type="number" min="80" max="220" placeholder="公分" value="${esc(s.height)}" data-f="height" aria-label="身高（公分）">cm</label>
       </div>
-      <input class="sc-note" type="text" value="${esc(s.note)}" placeholder="備註…" data-f="note" aria-label="備註">
+      <input class="sc-note" type="text" value="${esc(s.note)}" placeholder="備註…（也可以寫「不要跟24號坐」）" data-f="note" aria-label="備註">
       <div class="sc-foot">
         <div class="sc-sum">${summaryHtml(s)}</div>
         <button class="sc-edit" data-open-rules>條件設定 ›</button>
@@ -941,6 +974,57 @@ function renderRuleDialog() {
 }
 
 /**
+ * 一段「同學關係」的寫法 → [[key, 對象], …]；看不懂回傳 null
+ *   不要跟24坐、不要跟王小明同組、不要跟24同組附近、跟5號同組、不相鄰:3/7
+ */
+const NEAR_WORDS = '坐|相鄰|坐隔壁|隔壁|坐一起|坐在一起|附近|旁邊|靠近|坐附近|坐旁邊|前後左右|坐近';
+function matchRelation(tk) {
+  let m;
+  if ((m = tk.match(/^(?:不相鄰|不可相鄰|不要相鄰)[:：](.+)$/))) return [['avoidAdj', m[1]]];
+  if ((m = tk.match(/^(?:不同組|不可同組|不要同組)[:：](.+)$/))) return [['avoidGroup', m[1]]];
+  if ((m = tk.match(/^(?:同組|盡量同組|要同組)[:：](.+)$/))) return [['preferGroup', m[1]]];
+  // 不要跟24同組附近／同組或附近／同組也不要坐旁邊 → 不可同組＋不可相鄰
+  if ((m = tk.match(new RegExp(`^不(?:要|可|能|可以)?(?:跟|和|與)(.+?)同組(?:或|和|也不要|也不能|、)?(?:${NEAR_WORDS})$`)))) return [['avoidGroup', m[1]], ['avoidAdj', m[1]]];
+  if ((m = tk.match(new RegExp(`^不(?:要|可|能|可以)?(?:跟|和|與)(.+?)(?:${NEAR_WORDS})(?:或|和|也不要|也不能|、)?同組$`)))) return [['avoidGroup', m[1]], ['avoidAdj', m[1]]];
+  if ((m = tk.match(/^不(?:要|可|能|可以)?(?:跟|和|與)(.+?)同組$/))) return [['avoidGroup', m[1]]];
+  if ((m = tk.match(new RegExp(`^不(?:要|可|能|可以)?(?:跟|和|與)(.+?)(?:${NEAR_WORDS})$`)))) return [['avoidAdj', m[1]]];
+  if ((m = tk.match(/^(?:要|想|盡量)?(?:跟|和|與)(.+?)(?:同組|一組|坐一起|坐在一起)$/))) return [['preferGroup', m[1]]];
+  return null;
+}
+
+/** 名字或座號 → 學生 */
+function findStudentRef(q, list = state.students) {
+  const t = q.replace(/號$/, '').trim();
+  return list.find((x) => x.name === t) || (/^\d+$/.test(t) ? list.find((x) => String(x.no) === t) : null) || list.find((x) => x.name.includes(t) && t.length >= 2);
+}
+
+const REL_LABEL = { avoidAdj: '不可相鄰', avoidGroup: '不可同組', preferGroup: '盡量同組' };
+
+/** 學生卡片的備註裡寫了同學關係，就直接設定好，並從備註拿掉 */
+function applyNoteRelations(s) {
+  const parts = String(s.note || '').split(/([\s,，、;；。]+)/);
+  const done = [], warn = [];
+  const keep = parts.map((p) => {
+    const rels = p.trim() && matchRelation(p.trim());
+    if (!rels) return p;
+    const hits = [];
+    let bad = false;
+    for (const [key, whoStr] of rels) {
+      for (const w of whoStr.split(/[\/／+＋]/).map((x) => x.trim()).filter(Boolean)) {
+        const o = findStudentRef(w);
+        if (!o || o.id === s.id) { bad = true; warn.push(w); continue; }
+        hits.push([key, o]);
+      }
+    }
+    if (bad) return p;
+    hits.forEach(([key, o]) => { setRelation(s.id, o.id, key, true); done.push(`${REL_LABEL[key]} ${o.no}.${o.name}`); });
+    return '';
+  });
+  if (done.length) s.note = keep.join('').replace(/^[\s,，、;；。]+|[\s,，、;；。]+$/g, '').replace(/([\s,，、;；。])[\s,，、;；。]+/g, '$1');
+  return { done, warn: [...new Set(warn)] };
+}
+
+/**
  * 解析批次貼上的一行，可以寫：
  *   開頭的數字＝座號；第一個看不懂的詞＝姓名，之後看不懂的詞放進備註
  *   男／女、近視、身高（公分或 矮／中矮／中／中高／高）
@@ -971,12 +1055,7 @@ function parseStudentLine(line, defaultNo, newTags = []) {
     else if (/^(後排|坐後排|坐後面|靠後|盡量後排|後面)$/.test(tk)) st.pref = 'back';
     else if (/^(外側|靠外側|靠窗|靠邊|盡量外側)$/.test(tk)) st.hpref = 'outer';
     else if (/^(中間|靠中間|盡量中間)$/.test(tk)) st.hpref = 'center';
-    else if ((m = tk.match(/^(?:不相鄰|不可相鄰|不要相鄰)[:：](.+)$/))) addRel('avoidAdj', m[1]);
-    else if ((m = tk.match(/^(?:不同組|不可同組|不要同組)[:：](.+)$/))) addRel('avoidGroup', m[1]);
-    else if ((m = tk.match(/^(?:同組|盡量同組|要同組)[:：](.+)$/))) addRel('preferGroup', m[1]);
-    else if ((m = tk.match(/^不(?:要|可|能|可以)?(?:跟|和|與)(.+?)同組$/))) addRel('avoidGroup', m[1]);
-    else if ((m = tk.match(/^不(?:要|可|能|可以)?(?:跟|和|與)(.+?)(?:坐|相鄰|坐隔壁|隔壁|坐一起|坐在一起)$/))) addRel('avoidAdj', m[1]);
-    else if ((m = tk.match(/^(?:要|想|盡量)?(?:跟|和|與)(.+?)(?:同組|一組|坐一起|坐在一起)$/))) addRel('preferGroup', m[1]);
+    else if ((m = matchRelation(tk))) m.forEach(([key, who]) => addRel(key, who));
     else if ((m = tk.match(/^備註[:：](.+)$/))) notes.push(m[1]);
     else if ((m = tk.match(/^[#＃](.+)$/)) || findTag(tk)) {
       const name = m ? m[1] : tk;
@@ -1066,6 +1145,13 @@ function bindStudentsPanel() {
   });
   grid.addEventListener('change', (e) => {
     const card = cardOf(e.target);
+    if (card && e.target.dataset.f === 'note') {
+      const s = studentById(card.dataset.sid);
+      const { done, warn } = applyNoteRelations(s);
+      if (done.length) { afterStudentsChanged(); toast(`${s.name}：已設定 ${done.join('、')}`, 4000); }
+      if (warn.length) toast(`${s.name}：找不到「${warn.join('、')}」，請寫名字或座號`, 4000);
+      return;
+    }
     if (!card || e.target.dataset.f !== 'myopia') return;
     studentById(card.dataset.sid).myopia = e.target.checked;
     e.target.closest('.sc-pill').classList.toggle('on', e.target.checked);
@@ -1096,7 +1182,8 @@ function bindStudentsPanel() {
   });
 
   // 條件設定視窗
-  $('#rdClose').addEventListener('click', () => $('#ruleDialog').close());
+  $('#rdClose').addEventListener('click', () => { $('#ruleDialog').close(); saveNow(); });
+  $('#btnSaveNow').addEventListener('click', () => saveNow());
   $('#ruleDialog').addEventListener('close', () => { renderTable(); renderStats(); renderConditions(); });
   $('#rdBody').addEventListener('click', (e) => {
     const btn = e.target.closest('button');
@@ -1229,10 +1316,7 @@ function bindStudentsPanel() {
     state.students = list;
     // 第二輪：把「不要跟誰坐」「跟誰同組」對到名單上的同學（名字或座號）
     const warn = [];
-    const findStu = (q) => {
-      const t = q.replace(/號$/, '').trim();
-      return list.find((x) => x.name === t) || (/^\d+$/.test(t) ? list.find((x) => String(x.no) === t) : null) || list.find((x) => x.name.includes(t) && t.length >= 2);
-    };
+    const findStu = (q) => findStudentRef(q, list);
     let ruleN = 0;
     parsed.forEach(({ st, rels }) => {
       for (const [key, who] of rels) {
@@ -1243,6 +1327,7 @@ function bindStudentsPanel() {
       }
     });
     state.assign = {};
+    state.pool = [];
     state.locked = [];
     ui.selected = null;
     relayout();
@@ -1268,6 +1353,7 @@ function renderSeatsPanel() {
   $('#btnUnlockAll').disabled = !state.locked.length;
   $('#btnRemember').title = prevInfoText().replace('📌 ', '');
   renderLayoutOpts();
+  renderPool(); // 先決定名條區在不在，教室才算得出可用寬度
   renderRoom();
   renderLegend();
   $('#btnSecret').classList.toggle('on', !!ui.secretMode);
@@ -2122,7 +2208,7 @@ function renderCloudButton() {
   if (!b) return;
   const s = cloud.session;
   const label = {
-    idle: '', ok: '✓ 已同步', saving: '同步中…', offline: '⚠ 離線，稍後同步', conflict: '⚠ 有衝突', error: '⚠ 未同步',
+    idle: '', ok: '✓ 已同步', dirty: '● 稍後同步', saving: '同步中…', offline: '⚠ 離線，稍後同步', conflict: '⚠ 有衝突', error: '⚠ 未同步',
   }[cloud.status] || '';
   b.textContent = s ? `☁️ ${s.code} ${s.expired ? '⚠ 請重新登入' : label}`.trim() : '☁️ 雲端';
   b.classList.toggle('warn', !!s && (s.expired || ['offline', 'conflict', 'error'].includes(cloud.status)));
@@ -2130,9 +2216,22 @@ function renderCloudButton() {
   b.title = s ? `雲端班級：${s.code}${cloud.msg ? '（' + cloud.msg + '）' : ''}` : '用班級代碼＋老師密碼存到雲端';
 }
 
+// 自動同步的間隔：5 分鐘（按「💾 儲存」、切到別的視窗或關掉網頁時會馬上上傳）
+const SYNC_MS = 5 * 60 * 1000;
 function scheduleCloudSave() {
-  clearTimeout(cloud.timer);
-  cloud.timer = setTimeout(() => cloudSave(), 2500);
+  // 抽籤專用連結：結果要盡快回到雲端
+  if (cloud.session?.kiosk) { clearTimeout(cloud.timer); cloud.timer = setTimeout(() => cloudSave(), 2500); return; }
+  if (cloud.status === 'ok' || cloud.status === 'idle') setCloudStatus('dirty');
+  if (cloud.timer) return; // 已經排好了，不用每改一次就重新計時
+  cloud.timer = setTimeout(() => { cloud.timer = null; cloudSave(); }, SYNC_MS);
+}
+/** 有還沒上傳的修改就馬上上傳 */
+function flushCloudSave() {
+  const sess = cloud.session;
+  if (!sess || sess.expired || sess.kiosk) return;
+  if (hashStr(JSON.stringify(state)) === sess.syncedHash) return;
+  clearTimeout(cloud.timer); cloud.timer = null;
+  cloudSave();
 }
 
 async function cloudSave(force = false) {
@@ -2181,7 +2280,7 @@ function applyCloudState(newState, updatedAt) {
   cloud.session.updatedAt = updatedAt;
   cloud.session.syncedHash = hashStr(json);
   setSession(cloud.session);
-  clearTimeout(cloud.timer);
+  clearTimeout(cloud.timer); cloud.timer = null;
   setCloudStatus('ok');
 }
 
@@ -2189,6 +2288,7 @@ function applyCloudState(newState, updatedAt) {
 async function cloudPull({ quiet = false } = {}) {
   const sess = cloud.session;
   if (!sess || sess.expired || cloud.busy || ui.drawing) return;
+  cloud.pulledAt = Date.now();
   try {
     const r = await cloudCall('load', { code: sess.code, token: sess.token, loginAt: sess.loginAt });
     if (!r.ok) { if (r.error === 'session') sessionExpired(); else setCloudStatus(r.error === 'offline' ? 'offline' : 'error', cloudErrText(r)); return; }
@@ -2421,7 +2521,7 @@ async function cloudAction(act) {
       if (!sess.expired) await cloudCall('logout', { code: sess.code, token: sess.token }).catch(() => {});
       cloud.session = null;
       setSession(null);
-      clearTimeout(cloud.timer);
+      clearTimeout(cloud.timer); cloud.timer = null;
       state = load() || defaultState();
       ui.history = []; ui.selected = null; ui.selSeat = null;
       $('#className').value = state.className || '';
@@ -2461,14 +2561,19 @@ function bindCloud() {
   $('#conflictLocal').addEventListener('click', () => resolveConflict(false));
   window.addEventListener('online', () => cloudSave());
   // 切回這個分頁時，看看其他裝置有沒有新資料
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') cloudPull({ quiet: false }); });
+  // 切回來時，超過 5 分鐘沒檢查才去看；切走時把還沒上傳的修改送出去
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') { if (Date.now() - (cloud.pulledAt || 0) > SYNC_MS) cloudPull({ quiet: false }); }
+    else flushCloudSave();
+  });
+  window.addEventListener('pagehide', flushCloudSave);
   document.body.classList.toggle('no-cloud', !cloudEnabled());
   renderCloudButton();
   if (cloud.session?.kiosk) startKiosk();
   else if (cloud.session && cloudEnabled()) cloudPull({ quiet: true });
   else if (FIRST_VISIT && cloudEnabled()) { renderCloudDialog(true); $('#cloudDialog').showModal(); }
-  // 開著的時候每分鐘看一次其他裝置有沒有新資料
-  setInterval(() => { if (document.visibilityState === 'visible' && cloud.session && !cloud.session.kiosk) cloudPull({ quiet: false }); }, 60000);
+  // 開著的時候每 5 分鐘看一次其他裝置有沒有新資料
+  setInterval(() => { if (document.visibilityState === 'visible' && cloud.session && !cloud.session.kiosk && Date.now() - (cloud.pulledAt || 0) >= SYNC_MS - 1000) cloudPull({ quiet: false }); }, 60000);
 }
 
 /* ---------- 抽籤專用模式（給學校大屏） ---------- */
@@ -2838,16 +2943,38 @@ function addDeskAt(x, y) {
   state.seats.push(seat);
   // 有學生還沒座位時，直接坐進新座位
   const seated = new Set(Object.values(state.assign));
-  const waiting = sortedStudents().find((s) => !seated.has(s.id));
+  const pooled = new Set(state.pool || []);
+  const waiting = sortedStudents().find((s) => !seated.has(s.id) && !pooled.has(s.id));
   if (waiting) state.assign[seat.id] = waiting.id;
   markDesksEdited();
   save();
   renderSeatsPanel();
 }
 
+/** 一次刪掉多出來的空位（名條區還沒放的人，會留給他們足夠的空位） */
+function deleteExtraDesks() {
+  const need = (state.pool || []).length;
+  const empties = seatOrder(state.seats).filter((x) => !state.assign[x.id]);
+  const extra = empties.length - need;
+  if (extra <= 0) { toast(need ? '空位剛好夠名條區的同學，沒有多的' : '沒有空位可以刪'); return; }
+  if (!confirm(`要刪掉 ${extra} 個沒有人坐的空位嗎？（按錯可以按「↶ 復原」）`)) return;
+  pushHistory();
+  const drop = new Set(empties.slice(-extra).map((x) => x.id));
+  state.seats = state.seats.filter((x) => !drop.has(x.id));
+  markDesksEdited();
+  save();
+  renderSeatsPanel();
+  toast(`已刪掉 ${extra} 個空位`);
+}
+
 function deleteDesk(seatId) {
   const sid = state.assign[seatId];
-  if (sid) {
+  if (sid && state.pool?.length) {
+    // 正在自己排：坐在這裡的人回到名條區
+    pushHistory();
+    state.pool.push(sid);
+    toast(`${studentById(sid)?.name || '學生'} 回到名條區`);
+  } else if (sid) {
     const empty = seatOrder(state.seats).find((s) => s.id !== seatId && !state.assign[s.id]);
     if (!empty) { toast('座位不能少於學生人數；請先新增空位或減少人數'); return; }
     pushHistory();
@@ -2916,6 +3043,60 @@ function renderSelInfo() {
     <dt>自訂條件</dt><dd>${tags}</dd>
     ${s.note ? `<dt>備註</dt><dd>${esc(s.note)}</dd>` : ''}
   </dl>${groupBox}<p class="hint">橘框：不可相鄰／同組的對象；綠框：盡量同組的對象。</p>`;
+}
+
+/* ---------- 名條區：清空座位，老師一個一個放 ---------- */
+function renderPool() {
+  const box = $('#pool');
+  if (!box) return;
+  const list = (state.pool || []).map(studentById).filter(Boolean);
+  document.body.classList.toggle('has-pool', list.length > 0);
+  box.hidden = !list.length;
+  $('#btnClearSeats').hidden = list.length > 0;
+  if (!list.length) { box.innerHTML = ''; return; }
+  const empty = state.seats.filter((x) => !state.assign[x.id]).length;
+  box.innerHTML = `<div class="pool-head"><b>名條</b> <span class="hint">還有 ${list.length} 位</span></div>
+    <p class="hint pool-tip">拖到座位上；或點名條再點座位。座位上的人拖回這裡＝拿下來。</p>
+    <div class="pool-list">${list.map((st) => `<div class="pool-chip ${st.gender ? 'g-' + st.gender : ''} ${ui.poolPick === st.id ? 'picked' : ''}" data-pool="${st.id}"><span class="d-no">${esc(st.no)}</span><span class="pc-name">${esc(st.name)}</span></div>`).join('')}</div>
+    <div class="pool-actions"><button class="btn small" id="poolFill" ${empty ? '' : 'disabled'}>剩下的依座號放進空位</button></div>`;
+}
+
+/** 把名條區的同學放進座位；座位上原本有人就換到名條區 */
+function placeFromPool(sid, seatId) {
+  pushHistory();
+  const prev = state.assign[seatId];
+  state.assign[seatId] = sid;
+  const i = state.pool.indexOf(sid);
+  if (prev) state.pool.splice(i, 1, prev); else state.pool.splice(i, 1);
+  ui.poolPick = null;
+  save();
+  renderSeatsPanel();
+}
+
+/** 座位上的同學拿下來放回名條區 */
+function moveToPool(seatId) {
+  const sid = state.assign[seatId];
+  if (!sid) return;
+  pushHistory();
+  delete state.assign[seatId];
+  state.pool.push(sid);
+  state.locked = state.locked.filter((x) => x !== sid);
+  save();
+  renderSeatsPanel();
+}
+
+function clearSeatsToPool() {
+  const locked = new Set(state.locked);
+  const take = seatOrder(state.seats).filter((x) => state.assign[x.id] && !locked.has(state.assign[x.id]));
+  if (!take.length) { toast('沒有可以拿下來的同學（鎖定的不會動）'); return; }
+  pushHistory();
+  const ids = take.map((x) => state.assign[x.id]);
+  take.forEach((x) => delete state.assign[x.id]);
+  state.pool = [...state.pool, ...ids].sort((a, b) => (Number(studentById(a)?.no) || 999) - (Number(studentById(b)?.no) || 999));
+  ui.selected = null; ui.selSeat = null; ui.poolPick = null;
+  save();
+  renderSeatsPanel();
+  toast(`已清空 ${ids.length} 個座位${locked.size ? '（鎖定的不動）' : ''}，名條在左邊`, 3500);
 }
 
 function swapSeats(a, b) {
@@ -3038,6 +3219,8 @@ function bindSeatsPanel() {
       toast(errs ? `已排座，但有 ${errs} 項規則無法同時滿足，請查看檢查結果` : '已依條件完成排座 ✓');
     }, 30);
   });
+  $('#btnClearSeats').addEventListener('click', clearSeatsToPool);
+  $('#btnDelEmpty').addEventListener('click', deleteExtraDesks);
   $('#btnRandom').addEventListener('click', () => { askClearUsedFixed(); pushHistory(); optimize(false); save(); renderSeatsPanel(); toast('已隨機排座（鎖定的座位不變）'); });
   $('#btnUndo').addEventListener('click', () => {
     const h = ui.history.pop();
@@ -3096,6 +3279,22 @@ function bindSeatsPanel() {
   });
 
   let drag = null;
+  const pool = $('#pool');
+  pool.addEventListener('click', (e) => {
+    if (e.target.closest('#poolFill')) {
+      pushHistory();
+      state.pool = [];
+      ensureSeating(); save(); renderSeatsPanel();
+      return;
+    }
+  });
+  pool.addEventListener('pointerdown', (e) => {
+    const chip = e.target.closest('.pool-chip');
+    if (!chip || e.button > 0) return;
+    const rect = chip.getBoundingClientRect();
+    drag = { fromPool: chip.dataset.pool, desk: chip, moved: false, sx: e.clientX, sy: e.clientY, ox: e.clientX - rect.left, oy: e.clientY - rect.top };
+    e.preventDefault();
+  });
   room.addEventListener('pointerdown', (e) => {
     const desk = e.target.closest('.desk');
     if (!desk || e.button > 0 || e.target.closest('button') || isClean()) return;
@@ -3113,6 +3312,21 @@ function bindSeatsPanel() {
     if (!drag) return;
     const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
     if (!drag.moved && Math.hypot(dx, dy) < 5) return;
+    if (drag.fromPool) {
+      if (!drag.moved) {
+        drag.moved = true;
+        drag.ghost = drag.desk.cloneNode(true);
+        drag.ghost.classList.add('drag-ghost', 'pool-ghost');
+        document.body.appendChild(drag.ghost);
+        drag.desk.classList.add('dragging');
+      }
+      drag.ghost.style.left = e.clientX - drag.ox + 'px';
+      drag.ghost.style.top = e.clientY - drag.oy + 'px';
+      const target = document.elementFromPoint(e.clientX, e.clientY)?.closest('#room .desk');
+      $$('#room .drop-target').forEach((d) => d !== target && d.classList.remove('drop-target'));
+      if (target) target.classList.add('drop-target');
+      return;
+    }
     if (!drag.moved) {
       drag.moved = true;
       if (state.mode === 'swap') {
@@ -3140,8 +3354,22 @@ function bindSeatsPanel() {
     if (!drag) return;
     const d = drag;
     drag = null;
+    if (d.fromPool) {
+      if (!d.moved) {
+        // 點一下名條：選起來，再點座位放進去
+        if (e.type === 'pointerup') { ui.poolPick = ui.poolPick === d.fromPool ? null : d.fromPool; renderPool(); }
+        return;
+      }
+      d.ghost.remove();
+      d.desk.classList.remove('dragging');
+      $$('#room .drop-target').forEach((x) => x.classList.remove('drop-target'));
+      const hit = e.type === 'pointerup' ? document.elementFromPoint(e.clientX, e.clientY)?.closest('#room .desk') : null;
+      if (hit) placeFromPool(d.fromPool, hit.dataset.seat);
+      return;
+    }
     if (!d.moved) {
       const sid = state.assign[d.seatId];
+      if (e.type === 'pointerup' && ui.poolPick && state.pool.includes(ui.poolPick)) { placeFromPool(ui.poolPick, d.seatId); return; }
       if (e.type === 'pointerup') {
         if (ui.selSeat === d.seatId) { ui.selSeat = null; ui.selected = null; } else { ui.selSeat = d.seatId; ui.selected = sid || null; }
         renderRoom();
@@ -3155,7 +3383,9 @@ function bindSeatsPanel() {
       const hit = e.type === 'pointerup' ? document.elementFromPoint(e.clientX, e.clientY) : null;
       const target = hit?.closest('#room .desk');
       $$('#room .drop-target').forEach((x) => x.classList.remove('drop-target'));
-      if (target && target !== d.desk) {
+      if (hit?.closest('#pool') || (hit?.closest('.room-card') && !hit.closest('#roomWrap') && document.body.classList.contains('has-pool'))) {
+        moveToPool(d.seatId);
+      } else if (target && target !== d.desk) {
         swapSeats(d.seatId, target.dataset.seat);
       } else if (!target && hit?.closest('#room')) {
         // 拖到空白處：整個座位（連同學生）移過去

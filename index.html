@@ -68,6 +68,7 @@
       <div class="card-head">
         <h2>學生名單</h2>
         <span class="hint">每張卡片可直接編輯；按「條件設定」設定同學關係、座位位置與自訂條件</span>
+        <span class="save-box"><span class="hint" id="saveStamp"></span><button class="btn primary small" id="btnSaveNow">💾 儲存</button></span>
       </div>
       <div class="stu-grid" id="stuGrid"></div>
       <button class="btn" id="btnAddStudent">＋ 新增學生</button>
@@ -85,6 +86,7 @@
         <button class="btn primary" id="btnArrange">✨ 依條件自動排座</button>
         <button class="btn draw-btn" id="btnDraw">🎰 抽籤</button>
         <button class="btn" id="btnRandom">🎲 隨機</button>
+        <button class="btn" id="btnClearSeats" title="座位全部清空，名條放在左邊，自己一個一個放">🧺 清空座位自己排</button>
         <button class="btn" id="btnUndo" title="復原上一步">↶ 復原</button>
       </div>
       <div class="tool-row">
@@ -94,6 +96,7 @@
         </div>
         <span class="edit-tools" id="editTools">
           <button class="btn small" id="btnAddDesk">＋ 新增座位</button>
+          <button class="btn small" id="btnDelEmpty" title="把沒有人坐的空位一次刪掉">－ 刪除多的空位</button>
           <label class="grp-pick">新座位加入 <select id="newDeskGroup" aria-label="新座位加入的組別"></select></label>
           <button class="btn small" id="btnResetDesks">還原桌椅排列</button>
         </span>
@@ -112,8 +115,11 @@
     <div class="seat-layout">
       <section class="card room-card">
         <h2 class="print-title" id="printTitle"></h2>
-        <div class="room-wrap" id="roomWrap">
-          <div class="room" id="room"></div>
+        <div class="room-row">
+          <div class="pool" id="pool" hidden></div>
+          <div class="room-wrap" id="roomWrap">
+            <div class="room" id="room"></div>
+          </div>
         </div>
         <p class="hint room-hint" id="roomHint"></p>
       </section>
@@ -185,7 +191,7 @@
     <div class="dlg">
       <div class="rd-head">
         <h2 id="rdTitle"></h2>
-        <button class="btn primary" id="rdClose">完成</button>
+        <button class="btn primary" id="rdClose">💾 儲存</button>
       </div>
       <div id="rdBody" class="rd-body"></div>
     </div>
@@ -279,7 +285,7 @@
         <details open><summary>🚀 快速開始（第一次使用）</summary>
           <ol>
             <li>在「① 學生與條件」設定班級人數（26～40 人），或按「批次貼上名單」一次貼上全班。</li>
-            <li>每位學生的卡片可以改姓名、性別、近視、身高；按「條件設定」可以設同學關係和座位偏好。</li>
+            <li>每位學生的卡片可以改姓名、性別、近視、身高；按「條件設定」可以設同學關係和座位偏好。備註格也可以直接打「不要跟24號坐」「不要跟24同組附近」「跟5號同組」，打完系統就會設定好。</li>
             <li>到「② 座位安排」選座位型式（直排、分組、ㄇ字型或座位圖）。</li>
             <li>按「✨ 依條件自動排座」，或按「🎰 抽籤」讓學生上台抽。</li>
             <li>排好之後按「📌 記住這次座位」，下次換座位時系統會避開同一個位子。</li>
@@ -317,9 +323,10 @@
           <ul>
             <li><b>直排／分組／ㄇ字型：</b>系統照人數自動排好桌子。</li>
             <li><b>座位圖（例如 本班）：</b>自己的排法，可以存很多張。按「＋ 新增座位圖」取名並選從哪種排法開始。</li>
-            <li><b>調整桌子：</b>座位圖裡，在空白處點兩下＝新增座位；拖到空白處＝移動；桌子左上角 ×＝刪除。</li>
+            <li><b>調整桌子：</b>座位圖裡，在空白處點兩下＝新增座位；拖到空白處＝移動；桌子左上角 ×＝刪除；「－ 刪除多的空位」一次刪掉沒人坐的空位。</li>
             <li><b>分組：</b>「依位置自動分組」把靠在一起的桌子分成同一組；點一下座位可以改它屬於第幾組。</li>
             <li><b>拖曳：</b>把學生拖到另一個座位＝互換；🔓 可以鎖定，自動排座時不會動。</li>
+            <li><b>🧺 清空座位自己排：</b>座位全部清空（鎖定的不動），名條排在左邊；把名條拖到座位上，或點名條再點座位。放到有人的座位，原本的人會回到名條區；座位上的人拖回名條區＝拿下來。「剩下的依座號放進空位」一次放完。</li>
           </ul>
         </details>
 
