@@ -69,6 +69,7 @@ function defaultState() {
       gender: { on: true, weight: 1 },
       prevSeat: { on: true, weight: 3, n: 1 },
       prevSide: { on: true, weight: 2 },
+      adjRange: 'gap', // 不可相鄰的範圍：touch 貼在一起、gap 隔一點也算、group 同一組也算
     },
     layout: { type: 'map', mapId: 'class', cols: 6, paired: true, groups: 6 },
     maps: [{ id: 'class', name: '本班', seats: CLASS_LAYOUT.map((p) => ({ ...p })) }],
@@ -454,20 +455,26 @@ function geometry(seats = state.seats) {
   const adj = new Uint8Array(N * N);
   const adjPairs = [];
   const rowPairs = [];
+  const isGroups = state.layout.type === 'groups' || (isTemplate() && seats.some((s) => s.group));
+  const groupKeys = [...new Set(seats.map((s) => s.group).filter(Boolean))];
+  const groupIdx = seats.map((s) => (s.group ? groupKeys.indexOf(s.group) : -1));
+  // 「相鄰」的範圍：貼在一起／中間隔一點也算／同一組也算
+  const range = state.conditions?.adjRange || 'gap';
+  const fx = range === 'touch' ? 1.3 : 2.0, fy = range === 'touch' ? 1.6 : 2.3;
   for (let i = 0; i < N; i++) {
     for (let j = i + 1; j < N; j++) {
       const dx = Math.abs(seats[i].x - seats[j].x);
       const dy = Math.abs(seats[i].y - seats[j].y);
-      if (dx < DESK_W * 1.3 && dy < DESK_H * 1.6) {
+      const touch = dx < DESK_W * 1.3 && dy < DESK_H * 1.6;
+      const near = dx < DESK_W * fx && dy < DESK_H * fy;
+      const grp = range === 'group' && isGroups && groupIdx[i] >= 0 && groupIdx[i] === groupIdx[j];
+      if (near || grp) {
         adj[i * N + j] = adj[j * N + i] = 1;
         adjPairs.push([i, j]);
-        if (dy < DESK_H / 2) rowPairs.push([i, j]);
       }
+      if (touch && dy < DESK_H / 2) rowPairs.push([i, j]);
     }
   }
-  const isGroups = state.layout.type === 'groups' || (isTemplate() && seats.some((s) => s.group));
-  const groupKeys = [...new Set(seats.map((s) => s.group).filter(Boolean))];
-  const groupIdx = seats.map((s) => (s.group ? groupKeys.indexOf(s.group) : -1));
   const sameGroup = (a, b) =>
     (groupIdx[a] >= 0 && groupIdx[a] === groupIdx[b]) || (!isGroups && adj[a * N + b] === 1);
   return { N, front, side, sideCat, adj, adjPairs, rowPairs, isGroups, groupIdx, groupCount: groupKeys.length, sameGroup };
@@ -931,6 +938,10 @@ function renderConditions() {
     <div class="cond fixed" title="不可相鄰、不可同組最優先；其次是盡量同組與座位偏好（在學生的「規則」中設定）">
       <span class="cond-text"><span class="cond-title">🤝 個人規則</span><span class="cond-desc">一律優先</span></span>
     </div>
+    <div class="cond fixed" title="「不可相鄰」「不能坐隔壁」要離多遠才算分開">
+      <span class="cond-text"><span class="cond-title">📐 相鄰範圍</span><span class="cond-desc">多近算坐在旁邊</span></span>
+      <select class="w-sel" data-adj-range aria-label="相鄰範圍">${[['touch', '只算貼在一起的'], ['gap', '中間隔一點也算'], ['group', '隔一點＋同一組都算']].map(([v, l]) => `<option value="${v}" ${(c.adjRange || 'gap') === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+    </div>
     <div class="cond fixed prev-info"><span class="cond-text"><span class="cond-desc">${prevInfoText()}</span>${state.prev ? '<button class="link-btn" data-clear-prev>清除紀錄</button>' : ''}</span></div>`;
 
   const box = $('#customConds');
@@ -1302,6 +1313,7 @@ function bindStudentsPanel() {
     if (k) state.conditions[k].on = e.target.checked;
     if (kw) state.conditions[kw].weight = Number(e.target.value);
     if ('prevN' in e.target.dataset) state.conditions.prevSeat.n = Number(e.target.value);
+    if ('adjRange' in e.target.dataset) state.conditions.adjRange = e.target.value;
     renderConditions(); save();
   });
   $('#builtinConds').addEventListener('click', (e) => {
