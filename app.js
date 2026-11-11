@@ -1942,17 +1942,23 @@ const isClean = () => document.body.classList.contains('big-screen') || !!ui.dra
 
 function startDraw() {
   if (ui.drawing) return;
-  askRememberCurrent();
-  ui.secretMode = false; // 抽籤時一定藏起老師的安排
+  // 老師畫面上按抽籤＝測試：設定面板留著；給學生抽（大屏、抽籤專用連結）才藏起老師的東西
+  const test = !document.body.classList.contains('big-screen') && !cloud.session?.kiosk;
+  if (!test) askRememberCurrent();
+  if (!test) ui.secretMode = false; // 學生看得到的畫面：一定藏起老師的安排
   ui.selSeat = null; ui.selected = null;
   pushHistory();
+  ui.drawTestHistory = test ? ui.history.length : 0;
   // 結果先依老師的設定排好、藏起來，學生抽到時才揭曉
   const sessionFixed = { ...state.secret.fixed };
   optimize(state.drawOpts.mode !== 'random', null, sessionFixed);
   save();
   const locked = new Set(state.locked);
   ui.drawing = { done: new Set(state.students.filter((x) => locked.has(x.id)).map((x) => x.id)), current: null, last: null, busy: false, mode: 'draw', fixed: sessionFixed };
+  ui.drawing.test = test;
   document.body.classList.add('is-drawing');
+  document.body.classList.toggle('draw-test', test);
+  $('#drawTestNote').hidden = !test;
   $('#drawBanner').hidden = false;
   $('#drawStick').classList.remove('rise');
   setDrawLabel('請選擇座號');
@@ -2083,12 +2089,22 @@ function endDraw() {
   if (!ui.drawing) return;
   const left = state.students.filter((x) => !ui.drawing.done.has(x.id)).length;
   if (left && !confirm(`還有 ${left} 人沒抽，結束後會直接顯示全部座位。確定結束？`)) return;
+  const test = ui.drawing.test;
   ui.drawing = null;
   ui.revealed = true;
-  // 記下這份內定已經用過（下次老師重排時會提醒清空）
-  if (Object.keys(state.secret.fixed).length) { state.secret.usedAt = Date.now(); save(); }
+  // 記下這份內定已經用過（下次老師重排時會提醒清空）；老師測試的不算
+  if (!test && Object.keys(state.secret.fixed).length) { state.secret.usedAt = Date.now(); save(); }
   $('#drawBanner').hidden = true;
-  document.body.classList.remove('is-drawing', 'pick-mode');
+  document.body.classList.remove('is-drawing', 'pick-mode', 'draw-test');
+  // 測試抽籤：問要不要回到抽籤前的座位
+  if (test && ui.history.length >= ui.drawTestHistory && ui.drawTestHistory && confirm('測試抽籤結束。\n要把座位恢復成抽籤前的樣子嗎？\n\n確定＝恢復　取消＝保留抽出來的座位')) {
+    ui.history.length = ui.drawTestHistory;
+    Object.assign(state, JSON.parse(ui.history.pop()));
+    ensureSeating(); save();
+    renderSeatsPanel();
+    toast('已恢復成抽籤前的座位');
+    return;
+  }
   renderSeatsPanel();
   toast('抽籤結束');
 }
@@ -3759,6 +3775,15 @@ function bindSeatsPanel() {
   $('#mapDialog').addEventListener('close', () => { if ($('#mapDialog').returnValue === 'ok') createMap(); });
   // 按「抽籤」直接進入籤筒畫面，設定在「說明」面板裡
   $('#btnDraw').addEventListener('click', startDraw);
+  $('#btnDrawLink').addEventListener('click', async () => {
+    renderCloudDialog();
+    $('#cloudDialog').showModal();
+    if (!cloud.session || cloud.session.expired) { cloudMsg('要先登入或建立雲端班級，才能產生抽籤連結'); return; }
+    const sel = $('#clDrawHours');
+    sel?.closest('.tf-row')?.scrollIntoView({ block: 'center' });
+    cloud.lastBtn = $('#cloudBody [data-cl="drawlink"]');
+    await cloudAction('drawlink');
+  });
   $('#bigDraw').addEventListener('click', () => {
     if (document.body.classList.contains('kiosk') && !document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});
     startDraw();

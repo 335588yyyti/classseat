@@ -85,7 +85,8 @@
         <div class="layout-opts" id="layoutOpts"></div>
         <span class="spacer"></span>
         <button class="btn primary" id="btnArrange">✨ 依條件自動排座</button>
-        <button class="btn draw-btn" id="btnDraw">🎰 抽籤</button>
+        <button class="btn draw-btn" id="btnDraw" title="在老師畫面先試抽，設定面板會留著，抽完可以恢復原本的座位">🧪 抽籤測試</button>
+        <button class="btn cloud-btn" id="btnDrawLink" title="產生給學校大屏用的抽籤連結（要先登入雲端班級）">🔗 產生抽籤連結</button>
         <button class="btn" id="btnRandom">🎲 隨機</button>
         <button class="btn" id="btnClearSeats" title="座位全部清空，名條放在左邊，自己一個一個放">🧺 清空座位自己排</button>
         <button class="btn" id="btnUndo" title="復原上一步">↶ 復原</button>
@@ -202,6 +203,7 @@
   </dialog>
 
   <div class="draw-stage" id="drawBanner" hidden>
+    <p class="draw-test-note" id="drawTestNote" hidden>🧪 老師畫面的測試抽籤：設定面板會留著。給學生抽請用「📺 大屏」或抽籤專用連結。</p>
     <div class="draw-modes" id="drawModes">
       <button data-dmode="draw" class="on">🎰 抽籤</button>
       <button data-dmode="pick">⭐ 自選座位</button>
@@ -291,7 +293,7 @@
             <li>在「① 學生與條件」設定班級人數（26～40 人），或按「批次貼上名單」一次貼上全班。</li>
             <li>每位學生的卡片可以改姓名、性別、近視、身高；按「條件設定」可以設同學關係和座位偏好。備註格也可以直接打「不要跟24號坐」「不要跟24同組附近」「跟5號同組」，打完系統就會設定好。</li>
             <li>到「② 座位安排」選座位型式（直排、分組、ㄇ字型或座位圖）。</li>
-            <li>按「✨ 依條件自動排座」，或按「🎰 抽籤」讓學生上台抽。</li>
+            <li>按「✨ 依條件自動排座」，或用「🔗 產生抽籤連結」／「📺 大屏」讓學生上台抽（「🧪 抽籤測試」可以先自己試）。</li>
             <li>排好之後按「📌 記住教室現在的座位」，下次換座位時系統會避開同一個位子、左右換邊。自己拖好的座位，按自動排座或隨機前也會問要不要先記住。</li>
           </ol>
         </details>
@@ -341,7 +343,7 @@
 
         <details><summary>🎰 抽籤（學生上台抽）</summary>
           <ol>
-            <li>按「🎰 抽籤」進入籤筒畫面，所有座位先變成「？」。</li>
+            <li>給學生抽：用「🔗 產生抽籤連結」在大屏電腦打開，或按「📺 大屏」再按「🎰 抽籤」。進入籤筒畫面後，所有座位先變成「？」。老師自己先試，按「🧪 抽籤測試」（設定面板會留著，抽完可以恢復原本的座位）。</li>
             <li>學生上台點自己的座號 → 按「搖籤筒」→ 跳出寫著名字的籤，他的座位會亮起來。</li>
             <li>抽過的座號會變灰。請假的同學最後按「全部揭曉」。</li>
             <li>全部抽完可以直接按「📌 記住教室現在的座位」。</li>

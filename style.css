@@ -566,3 +566,7 @@ body.big-screen .class-switch, body.is-drawing .class-switch { display: none !im
 .room-summary.warn { background: #fff4e5; color: #8a4b00; font-weight: 600; }
 body.big-screen .room-summary, body.is-drawing .room-summary { display: none; }
 @media print { .room-summary { display: none !important; } }
+
+/* 老師畫面上測試抽籤：設定面板留著 */
+body.is-drawing.draw-test .side { display: flex !important; flex-direction: column; gap: 12px; margin-top: 12px; }
+.draw-test-note { margin: 0 0 8px; padding: 6px 10px; border-radius: 8px; background: #eef2ff; color: #3730a3; font-size: 12.5px; }
