@@ -2252,7 +2252,8 @@ function renderCloudDialog(welcome = false) {
   const sess = cloud.session;
   let html = '';
   $('#cloudBody').after($('#cloudMsg'));
-  if (welcome && !sess) {
+  cloud.welcome = welcome && !sess;
+  if (cloud.welcome) {
     html = `<div class="cl-box ok"><b>👋 歡迎使用！</b>先幫你們班建立一個雲端班級，之後在任何電腦、手機登入都是同一份資料。每個班級各自獨立，不會看到或改到別班的資料。</div>
       <div class="cl-form">
         <label>班級代碼<input type="text" id="clCode" placeholder="自己取，例如 302、class3b" autocomplete="username" maxlength="20"></label>
@@ -2438,6 +2439,13 @@ async function cloudAction(act) {
 function bindCloud() {
   $('#btnCloud').addEventListener('click', () => { renderCloudDialog(); $('#cloudDialog').showModal(); });
   $('#cloudClose').addEventListener('click', () => $('#cloudDialog').close());
+  // 新老師的歡迎視窗關掉後（建立班級、先試用或按關閉），接著打開使用說明；登入舊班級的就不用
+  $('#cloudDialog').addEventListener('close', () => {
+    if (!cloud.welcome) return;
+    cloud.welcome = false;
+    if (cloud.lastBtn?.dataset.cl === 'login' && cloud.session) return;
+    $('#guideDialog').showModal();
+  });
   $('#cloudBody').addEventListener('click', (e) => {
     const b = e.target.closest('[data-cl]');
     if (b) { cloud.lastBtn = b; cloudAction(b.dataset.cl); }
