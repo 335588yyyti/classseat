@@ -195,6 +195,25 @@ function save() {
   }, 200);
 }
 
+/** 按「💾 儲存」：馬上存到這台，有登入雲端也馬上上傳 */
+async function saveNow() {
+  clearTimeout(saveTimer);
+  const json = JSON.stringify(state);
+  let okLocal = true;
+  try { store().setItem(storeKey(), json); } catch { okLocal = false; }
+  const stamp = (t) => { const el = $('#saveStamp'); if (el) el.textContent = t; };
+  const hm = new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false });
+  if (cloud.session && !cloud.session.kiosk && !cloud.session.expired) {
+    toast('儲存中…');
+    clearTimeout(cloud.timer);
+    await cloudSave(true);
+    if (cloud.status === 'ok') { toast(`✓ 已儲存到雲端（${cloud.session.code}）`); stamp(`✓ ${hm} 已存到雲端`); }
+    else { toast(okLocal ? '已存在這台，雲端還沒存到，連上網路後會自動上傳' : '儲存失敗', 4000); stamp(okLocal ? `${hm} 已存在這台` : ''); }
+  } else if (okLocal) {
+    toast('✓ 已儲存在這台電腦（建議偶爾按「💾 備份／搬移」備份）', 3500); stamp(`✓ ${hm} 已儲存`);
+  } else toast('這個瀏覽器不能儲存（可能是無痕視窗），請用「💾 備份／搬移」', 4000);
+}
+
 const ui = { selected: null, selSeat: null, newGroup: 'auto', scale: 1, history: [] };
 
 function toast(msg, ms = 2200) {
@@ -1149,7 +1168,8 @@ function bindStudentsPanel() {
   });
 
   // 條件設定視窗
-  $('#rdClose').addEventListener('click', () => $('#ruleDialog').close());
+  $('#rdClose').addEventListener('click', () => { $('#ruleDialog').close(); saveNow(); });
+  $('#btnSaveNow').addEventListener('click', () => saveNow());
   $('#ruleDialog').addEventListener('close', () => { renderTable(); renderStats(); renderConditions(); });
   $('#rdBody').addEventListener('click', (e) => {
     const btn = e.target.closest('button');

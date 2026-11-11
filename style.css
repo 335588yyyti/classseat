@@ -504,3 +504,4 @@ dialog.guide-dlg { width: min(720px, 96vw); }
 .secret-card .card-head { flex-wrap: nowrap; gap: 6px; align-items: center; }
 .secret-card .card-head h2, .secret-card #btnGuide, .secret-card #secretClose { white-space: nowrap; }
 .secret-card #btnGuide { padding: 3px 8px; }
+.save-box { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; }
