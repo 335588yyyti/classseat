@@ -1701,8 +1701,29 @@ function renderSecret() {
     </div>`;
     queueMicrotask(() => { const el = $('[data-sec-fixed]'); if (el) el.value = fx; });
   }
-  const apartHtml = sec.apart.map(([a, b2], i) => `<span class="sec-chip">${nm(a)} ↔ ${nm(b2)}<button data-sec-unapart="${i}" aria-label="移除">×</button></span>`).join('')
-    || '<span class="hint">尚未設定</span>';
+  queueMicrotask(() => { const el = $('[data-sec-apart-who]'); if (el) el.value = ui.apartWho || ''; });
+  // 不能坐隔壁：依人分組顯示（同一個人的放一起）
+  const apartRows = [];
+  {
+    let rest = sec.apart.map(([a, b2]) => [a, b2]);
+    while (rest.length) {
+      const cnt = {};
+      rest.forEach(([a, b2]) => { cnt[a] = (cnt[a] || 0) + 1; cnt[b2] = (cnt[b2] || 0) + 1; });
+      const p = Object.keys(cnt).sort((x, y) => cnt[y] - cnt[x] || (Number(studentById(x)?.no) || 0) - (Number(studentById(y)?.no) || 0))[0];
+      const others = rest.filter(([a, b2]) => a === p || b2 === p).map(([a, b2]) => (a === p ? b2 : a));
+      rest = rest.filter(([a, b2]) => a !== p && b2 !== p);
+      apartRows.push({ p, others });
+    }
+  }
+  const apartWho = ui.apartWho && studentById(ui.apartWho) ? ui.apartWho : '';
+  const apartSet = new Set(sec.apart.filter(([a, b2]) => a === apartWho || b2 === apartWho).map(([a, b2]) => (a === apartWho ? b2 : a)));
+  const apartHtml = (apartRows.map(({ p, others }) => `<div class="apart-row"><button class="apart-who" data-sec-apart-pick="${p}" title="編輯 ${nm(p)}">${nm(p)}</button><span class="apart-x">✕</span>
+      <span class="sec-chips">${others.map((o) => `<span class="sec-chip">${nm(o)}<button data-sec-unapart-pair="${p}|${o}" aria-label="移除">×</button></span>`).join('')}</span></div>`).join('')
+    || '<span class="hint">尚未設定</span>');
+  const apartEditor = `<div class="sec-pair"><select data-sec-apart-who><option value="">選一位同學…</option>${studOpts()}</select></div>
+    ${apartWho ? `<p class="hint"><b>${nm(apartWho)}</b> 旁邊不能坐誰？點名字就加入或取消（紫色＝不能坐隔壁）</p>
+      <div class="apart-grid">${sortedStudents().filter((x) => x.id !== apartWho).map((x) => `<button class="${apartSet.has(x.id) ? 'on' : ''}" data-sec-apart-toggle="${x.id}">${esc(x.no)}. ${esc(x.name)}</button>`).join('')}</div>
+      <div class="sec-pair"><button class="btn small" data-sec-apart-done>完成</button></div>` : ''}`;
   const list = [
     ...Object.entries(sec.fixed).map(([k, v]) => ({ k, t: `#${seatNo(k)} 一定是 ${nm(v)}` })),
     ...Object.entries(sec.ban).map(([k, v]) => ({ k, t: `#${seatNo(k)} 不會是 ${v.map(nm).join('、')}` })),
@@ -1737,9 +1758,8 @@ function renderSecret() {
     ${seatHtml}
     <div class="sec-block">
       <div class="sec-title">不能坐隔壁</div>
-      <div class="sec-chips">${apartHtml}</div>
-      <div class="sec-pair"><select data-sec-a><option value="">選同學…</option>${studOpts()}</select><span>和</span>
-        <select data-sec-b><option value="">選同學…</option>${studOpts()}</select><button class="btn small" data-sec-addapart>加入</button></div>
+      <div class="apart-list">${apartHtml}</div>
+      ${apartEditor}
     </div>
     <div class="sec-block">
       <div class="sec-title">全部安排（${list.length + sec.apart.length}）${list.length + sec.apart.length ? '<button class="link-btn" data-sec-clear>全部清除</button>' : ''}</div>
@@ -1758,6 +1778,11 @@ function bindSecret() {
   box.addEventListener('change', (e) => {
     const seatId = ui.selSeat;
     const v = e.target.value;
+    if ('secApartWho' in e.target.dataset) {
+      ui.apartWho = v || null;
+      renderSecret();
+      return;
+    }
     if ('secFixed' in e.target.dataset && seatId) {
       delete sec().usedAt;
       for (const [k, x] of Object.entries(sec().fixed)) if (x === v) delete sec().fixed[k];
@@ -1795,9 +1820,23 @@ function bindSecret() {
       const list = (sec().ban[ui.selSeat] || []).filter((x) => x !== d.secUnban);
       if (list.length) sec().ban[ui.selSeat] = list; else delete sec().ban[ui.selSeat];
       done();
-    } else if (d.secUnapart !== undefined) {
-      sec().apart.splice(Number(d.secUnapart), 1);
+    } else if (d.secUnapartPair) {
+      const [a, b] = d.secUnapartPair.split('|');
+      sec().apart = sec().apart.filter(([x, y]) => !((x === a && y === b) || (x === b && y === a)));
       done();
+    } else if (d.secApartPick) {
+      ui.apartWho = d.secApartPick;
+      renderSecret();
+    } else if (d.secApartToggle) {
+      const a = ui.apartWho, b = d.secApartToggle;
+      if (!a || a === b) return;
+      const has = sec().apart.some(([x, y]) => (x === a && y === b) || (x === b && y === a));
+      if (has) sec().apart = sec().apart.filter(([x, y]) => !((x === a && y === b) || (x === b && y === a)));
+      else sec().apart.push([a, b]);
+      done();
+    } else if ('secApartDone' in d) {
+      ui.apartWho = null;
+      renderSecret();
     } else if ('secAddapart' in d) {
       const a = $('[data-sec-a]').value, b = $('[data-sec-b]').value;
       if (!a || !b || a === b) { toast('請選兩位不同的同學'); return; }
