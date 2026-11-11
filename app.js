@@ -543,6 +543,22 @@ function buildModel() {
     sidePull[i] = s.hpref === 'outer' ? 5 : s.hpref === 'center' ? -5 : 0;
   });
   const gender = studs.map((s) => s.gender || '');
+  const hasBoth = gender.includes('M') && gender.includes('F');
+
+  // 每一組都要有男有女（不能整組都是男生或都是女生）；隨機排也遵守
+  function mixCost(occ) {
+    const { isGroups, groupIdx, groupCount } = geo;
+    if (!wG || !isGroups || !groupCount || !hasBoth) return 0;
+    const m = new Int16Array(groupCount), f = new Int16Array(groupCount);
+    for (let s = 0; s < occ.length; s++) {
+      const st = occ[s], g = groupIdx[s];
+      if (st < 0 || g < 0) continue;
+      if (gender[st] === 'M') m[g]++; else if (gender[st] === 'F') f[g]++;
+    }
+    let t = 0;
+    for (let g = 0; g < groupCount; g++) if (m[g] + f[g] >= 2 && (!m[g] || !f[g])) t += 600;
+    return t;
+  }
 
   function cost(occ, pos) {
     let t = 0;
@@ -578,6 +594,7 @@ function buildModel() {
         for (const st of spreadTags) if (st.set.has(sa) && st.set.has(sb)) t += st.w * 25;
       }
     }
+    t += mixCost(occ);
     if (isGroups && groupCount && spreadTags.length) {
       const tagCnt = spreadTags.map(() => new Int16Array(groupCount));
       for (let s = 0; s < occ.length; s++) {
@@ -605,7 +622,7 @@ function buildModel() {
     return t;
   }
 
-  return { geo, idx, cost, secretCost, hasSecret: banList.length + apart.length > 0 };
+  return { geo, idx, cost, secretCost, mixCost, hasSecret: banList.length + apart.length > 0, hasMix: !!(wG && geo.isGroups && geo.groupCount && hasBoth) };
 }
 
 function optimize(useConditions = true, extraFixed = null, fixedOverride = null) {
@@ -664,9 +681,9 @@ function optimize(useConditions = true, extraFixed = null, fixedOverride = null)
     return Math.max(0, t - emptyIdeal) * 30;
   } : () => 0;
   // 完全隨機時只看老師的暗中安排；依條件時兩者都看
-  const costFn = useConditions ? (o, p) => model.cost(o, p) + model.secretCost(o, p) + emptyCost(o) : (o, p) => model.secretCost(o, p) + emptyCost(o);
+  const costFn = useConditions ? (o, p) => model.cost(o, p) + model.secretCost(o, p) + emptyCost(o) : (o, p) => model.secretCost(o, p) + emptyCost(o) + model.mixCost(o);
   let best = initial();
-  if ((useConditions || model.hasSecret || nEmpty > 0) && movable.length > 1) {
+  if ((useConditions || model.hasSecret || model.hasMix || nEmpty > 0) && movable.length > 1) {
     let bestCost = costFn(best.occ, best.pos);
     const runs = useConditions ? 4 : 3, iters = useConditions ? 16000 : 8000;
     for (let r = 0; r < runs && !(bestCost === 0 && !useConditions); r++) {
@@ -793,6 +810,21 @@ function evaluate() {
   if (prevSameSeat.length) items.push({ level: 'warn', text: `${prevN() > 1 ? `跟最近 ${prevN()} 次坐過的位子重複` : '跟上次坐同一個位子'}：${list(prevSameSeat)}` });
   if (prevStillL.length) items.push({ level: 'warn', text: `上次在左側、這次還在左側（建議換到右側）：${list(prevStillL)}` });
   if (prevStillR.length) items.push({ level: 'warn', text: `上次在右側、這次還在右側（建議換到左側）：${list(prevStillR)}` });
+  // 每一組都要有男有女
+  if (state.conditions.gender.on && geo.isGroups && geo.groupCount) {
+    const byG = {};
+    state.seats.forEach((x, i) => {
+      const st = studentById(state.assign[x.id]);
+      if (!st || geo.groupIdx[i] < 0 || !st.gender) return;
+      ((byG[x.group] ||= { M: 0, F: 0, seats: [] })[st.gender]++, byG[x.group].seats.push(x.id));
+    });
+    const both = state.students.some((x) => x.gender === 'M') && state.students.some((x) => x.gender === 'F');
+    for (const [g, v] of Object.entries(byG)) {
+      if (!both || v.M + v.F < 2 || (v.M && v.F)) continue;
+      items.push({ level: 'warn', text: `第 ${groupNum(g) || '?'} 組都是${v.M ? '男生' : '女生'}，每組要有男有女` });
+      v.seats.forEach((id) => warnSeats.add(id));
+    }
+  }
   for (const t of state.tags) {
     if (t.strategy !== 'spread') continue;
     const members = state.students.filter((s) => s.tags.includes(t.id) && seatIdxOf[s.id] !== undefined);
@@ -850,7 +882,7 @@ function renderConditions() {
   const defs = [
     ['myopia', '👓 視力', '近視坐前排', '近視的同學優先安排在前排'],
     ['height', '📏 身高', '矮前高後', '矮的同學坐前面、高的坐後面（填公分或選 矮／中矮／中／中高／高）'],
-    ['gender', '⚥ 性別', '男生旁邊放女生', '男生的左右兩旁盡量安排女生；女生旁邊不限制'],
+    ['gender', '⚥ 性別', '男生旁邊放女生、每組有男有女', '男生的左右兩旁盡量安排女生（女生旁邊不限制）；分組時每一組都要有男生也有女生'],
     ['prevSeat', '🔁 換位子', '不坐坐過的位子', '不要坐最近幾次坐過的位子（在座位安排按「📌 記住這次座位」記錄，最多記 3 次）'],
     ['prevSide', '↔ 左右換邊', '上次左側→換右側', '上次坐左側的換到右側、右側的換到左側；中間的不限（需先「📌 記住這次座位」）'],
   ];
@@ -1376,6 +1408,17 @@ function renderSeatsPanel() {
   $('#btnUnlockAll').disabled = !state.locked.length;
   $('#btnRemember').title = prevInfoText().replace('📌 ', '');
   renderLayoutOpts();
+  // 保險：有同學沒有座位、也不在名條區，就放進名條區讓老師看得到，不會默默不見
+  if (!ui.drawing && !document.body.classList.contains('big-screen')) {
+    const seated = new Set(Object.values(state.assign));
+    const inPool = new Set(state.pool || []);
+    const lost = sortedStudents().filter((x) => !seated.has(x.id) && !inPool.has(x.id));
+    if (lost.length) {
+      state.pool = [...(state.pool || []), ...lost.map((x) => x.id)];
+      save();
+      setTimeout(() => toast(`${lost.map((x) => x.no + '.' + x.name).join('、')} 還沒有座位，名條放在左邊`, 5000), 50);
+    }
+  }
   renderPool(); // 先決定名條區在不在，教室才算得出可用寬度
   renderRoom();
   renderLegend();
