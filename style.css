@@ -561,3 +561,8 @@ body.big-screen .class-switch, body.is-drawing .class-switch { display: none !im
 .apart-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 5px; margin: 6px 0; max-height: 280px; overflow-y: auto; }
 .apart-grid button { border: 1px solid var(--line); background: #fff; border-radius: 8px; padding: 5px 6px; font-size: 13px; cursor: pointer; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .apart-grid button.on { background: #ede9fe; border-color: #7c3aed; color: #4c1d95; font-weight: 700; }
+
+.room-summary { margin: 0 0 8px; padding: 6px 10px; border-radius: 8px; background: #eef6f4; color: #1f4e45; font-size: 13.5px; }
+.room-summary.warn { background: #fff4e5; color: #8a4b00; font-weight: 600; }
+body.big-screen .room-summary, body.is-drawing .room-summary { display: none; }
+@media print { .room-summary { display: none !important; } }
