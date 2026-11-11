@@ -181,6 +181,8 @@ function hashStr(str) {
   return (h >>> 0).toString(36) + ':' + str.length;
 }
 
+// 第一次打開（這台沒有任何資料、也沒登入）：先請老師建立自己的班級
+const FIRST_VISIT = (() => { try { return !cloud.session && !localStorage.getItem(STORE_KEY) && !localStorage.getItem('classseat-welcomed'); } catch { return false; } })();
 let state = load() || defaultState();
 let saveTimer = null;
 function save() {
@@ -2246,10 +2248,27 @@ async function resolveConflict(useCloud) {
 }
 
 /* ---------- 雲端視窗 ---------- */
-function renderCloudDialog() {
+function renderCloudDialog(welcome = false) {
   const sess = cloud.session;
   let html = '';
-  if (sess && !sess.expired) {
+  $('#cloudBody').after($('#cloudMsg'));
+  if (welcome && !sess) {
+    html = `<div class="cl-box ok"><b>👋 歡迎使用！</b>先幫你們班建立一個雲端班級，之後在任何電腦、手機登入都是同一份資料。每個班級各自獨立，不會看到或改到別班的資料。</div>
+      <div class="cl-form">
+        <label>班級代碼<input type="text" id="clCode" placeholder="自己取，例如 302、class3b" autocomplete="username" maxlength="20"></label>
+        <label>老師密碼<input type="password" id="clPass" placeholder="至少 6 個字" autocomplete="new-password"></label>
+        <label>確認密碼<input type="password" id="clPass2" placeholder="再輸入一次老師密碼" autocomplete="new-password"></label>
+        <label class="cl-check"><input type="checkbox" id="clRemember" checked> 記住這台裝置（自己的電腦或手機才勾）</label>
+        <input type="radio" name="clSrc" value="blank" checked hidden>
+      </div>
+      <div class="tf-row"><button class="btn primary" data-cl="create">建立我的班級</button></div>
+      <h3 class="sub">已經建立過班級了？</h3>
+      <p class="hint">上面填好班級代碼和密碼（確認密碼不用填），按登入。</p>
+      <div class="tf-row"><button class="btn" data-cl="login">登入</button></div>
+      <h3 class="sub">先試用看看</h3>
+      <div class="tf-row"><button class="btn small" data-cl="skip">先不用雲端（資料只存在這台）</button></div>
+      <p class="hint">之後隨時可以按左上角「☁️ 雲端」建立班級。</p>`;
+  } else if (sess && !sess.expired) {
     html = `<div class="cl-box ok">
         <div>目前登入：<b>${esc(sess.code)}</b>${state.className ? `（${esc(state.className)}）` : ''}</div>
         <div class="hint">${cloud.status === 'ok' ? `✓ 已同步${sess.updatedAt ? '（' + fmtTime(sess.updatedAt) + '）' : ''}` : esc(renderStatusText())}</div>
@@ -2293,12 +2312,20 @@ const renderStatusText = () => ({ saving: '同步中…', offline: '⚠ 目前�
 
 function cloudMsg(t, bad = true) {
   const el = $('#cloudMsg');
+  // 訊息放在剛剛按的按鈕旁邊，才看得到
+  const row = cloud.lastBtn?.isConnected && cloud.lastBtn.closest('.tf-row');
+  if (row) row.after(el); else $('#cloudBody').after(el);
   el.textContent = t;
   el.classList.toggle('bad', bad);
 }
 
 async function cloudAction(act) {
   const val = (id) => ($(id)?.value || '').trim();
+  if (act === 'skip') {
+    try { localStorage.setItem('classseat-welcomed', '1'); } catch { /* ignore */ }
+    $('#cloudDialog').close();
+    return;
+  }
   try {
     if (act === 'login' || act === 'create') {
       const code = val('#clCode').toLowerCase(), pass = $('#clPass').value;
@@ -2413,10 +2440,14 @@ function bindCloud() {
   $('#cloudClose').addEventListener('click', () => $('#cloudDialog').close());
   $('#cloudBody').addEventListener('click', (e) => {
     const b = e.target.closest('[data-cl]');
-    if (b) cloudAction(b.dataset.cl);
+    if (b) { cloud.lastBtn = b; cloudAction(b.dataset.cl); }
   });
   $('#cloudBody').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && (e.target.id === 'clPass' || e.target.id === 'clCode')) cloudAction('login');
+    if (e.key === 'Enter' && (e.target.id === 'clPass' || e.target.id === 'clCode' || e.target.id === 'clPass2')) {
+      const act = e.target.id === 'clPass2' || $('#cloudBody [data-cl="create"].primary') ? 'create' : 'login';
+      cloud.lastBtn = $(`#cloudBody [data-cl="${act}"]`);
+      cloudAction(act);
+    }
   });
   $('#conflictCloud').addEventListener('click', () => resolveConflict(true));
   $('#conflictLocal').addEventListener('click', () => resolveConflict(false));
@@ -2427,6 +2458,7 @@ function bindCloud() {
   renderCloudButton();
   if (cloud.session?.kiosk) startKiosk();
   else if (cloud.session && cloudEnabled()) cloudPull({ quiet: true });
+  else if (FIRST_VISIT && cloudEnabled()) { renderCloudDialog(true); $('#cloudDialog').showModal(); }
   // 開著的時候每分鐘看一次其他裝置有沒有新資料
   setInterval(() => { if (document.visibilityState === 'visible' && cloud.session && !cloud.session.kiosk) cloudPull({ quiet: false }); }, 60000);
 }
