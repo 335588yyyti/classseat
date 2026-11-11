@@ -532,3 +532,13 @@ body.big-screen .pool, body.is-drawing .pool { display: none !important; }
 @media print { .pool { display: none !important; } }
 .desk.empty .del { opacity: .85; }
 @media (hover: none) { .desk .del { opacity: 1; } }
+
+/* 救援碼、切換班級 */
+.rescue-code { font: 700 26px/1.3 ui-monospace, Menlo, Consolas, monospace; letter-spacing: 2px; text-align: center; padding: 12px; margin: 6px 0; border: 2px dashed var(--accent); border-radius: 10px; background: #f6fbfa; user-select: all; }
+.cl-forgot { margin-top: 14px; font-size: 14px; }
+.cl-forgot summary { cursor: pointer; color: var(--accent); }
+.cl-classes { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+.cl-class { display: inline-flex; align-items: center; gap: 2px; }
+.class-switch { margin-left: 6px; padding: 4px 6px; border-radius: 8px; border: 1px solid var(--line); background: #fff; font-size: 13px; max-width: 150px; }
+.class-switch[hidden] { display: none; }
+body.big-screen .class-switch, body.is-drawing .class-switch { display: none !important; }

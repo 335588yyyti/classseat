@@ -157,6 +157,20 @@ function setSession(sess) {
     if (sess) (sess.remember ? localStorage : sessionStorage).setItem(SESSION_KEY, JSON.stringify(sess));
   } catch { /* 無痕模式等情況 */ }
 }
+/* 同一台裝置登入的其他班級（科任老師一人好幾班）：班級代碼 → 登入資訊 */
+const OTHERS_KEY = 'classseat-others';
+function getOthers() {
+  const read = (st) => { try { return JSON.parse(st.getItem(OTHERS_KEY) || '{}') || {}; } catch { return {}; } };
+  return { ...read(sessionStorage), ...read(localStorage) };
+}
+function setOthers(map) {
+  const keep = {}, temp = {};
+  for (const [k, v] of Object.entries(map)) (v.remember ? keep : temp)[k] = v;
+  try {
+    localStorage.setItem(OTHERS_KEY, JSON.stringify(keep));
+    sessionStorage.setItem(OTHERS_KEY, JSON.stringify(temp));
+  } catch { /* ignore */ }
+}
 /* 抽籤專用連結：#draw=班級代碼&t=連結代碼。打開後馬上把網址列上的連結代碼拿掉，只存在這個分頁 */
 const KIOSK_KEY = 'classseat-kiosk';
 function readKiosk() {
@@ -2039,29 +2053,85 @@ const CLOUD_ERR = {
   session: '這台裝置的登入已失效（可能在別台改了密碼），請重新登入',
   kiosk: '這個抽籤連結已經失效或過期了，請老師重新產生一個',
   noemail: 'Firebase 還沒開啟「電子郵件／密碼」登入（Authentication → 登入方式 → 新增供應商）',
+  badrescue: '班級代碼或救援碼不對', rescuestale: '這組救援碼已經失效，請找管理 Firebase 的老師協助',
   toolarge: '資料太大，無法存到雲端', server: '雲端發生錯誤', action: '雲端設定不正確', offline: '連不上雲端，請檢查網路',
 };
 const cloudErrText = (r) => CLOUD_ERR[r.error] || '連線失敗';
 
-let fb = null;
+const FB_RESCUE = 'classseat_rescue';     // 救援碼（文件代碼＝班級代碼＋救援碼的雜湊）
+const fbApps = {};
 function loadScript(src) {
   return new Promise((res, rej) => { const el = document.createElement('script'); el.src = src; el.onload = res; el.onerror = rej; document.head.appendChild(el); });
 }
 /** 需要時才載入 Firebase（沒用雲端的老師不會載入任何東西） */
-async function fbInit() {
-  if (fb) return fb;
+async function fbApp(name) {
+  if (fbApps[name]) return fbApps[name];
   const cfg = fbConfig();
   if (!cfg?.apiKey) throw new Error('雲端還沒設定');
   if (!window.firebase?.firestore) {
     for (const m of ['app', 'auth', 'firestore']) await loadScript(`https://www.gstatic.com/firebasejs/${FB_VERSION}/firebase-${m}-compat.js`);
   }
-  const app = firebase.apps.find((x) => x.name === 'classseat') || firebase.initializeApp(cfg, 'classseat');
+  const app = firebase.apps.find((x) => x.name === name) || firebase.initializeApp(cfg, name);
   const auth = app.auth(), db = app.firestore();
   if (localStorage.getItem('classseat-fb-emulator')) { auth.useEmulator('http://127.0.0.1:9099'); db.useEmulator('127.0.0.1', 8080); }
   // 等 Firebase 從瀏覽器讀回登入狀態
   await new Promise((res) => { const off = auth.onAuthStateChanged(() => { off(); res(); }); });
-  fb = { app, auth, db, FieldValue: firebase.firestore.FieldValue, Timestamp: firebase.firestore.Timestamp, Persistence: firebase.auth.Auth.Persistence };
-  return fb;
+  fbApps[name] = { app, auth, db, FieldValue: firebase.firestore.FieldValue, Timestamp: firebase.firestore.Timestamp, Persistence: firebase.auth.Auth.Persistence };
+  return fbApps[name];
+}
+/** 需要時才載入 Firebase。每個班級用自己的 app，登入狀態分開記，切換班級不用重新輸入密碼 */
+async function fbInit(code = '') {
+  const shared = await fbApp('classseat');
+  if (!code) return shared;
+  // 舊版只有一個 app：已經在裡面登入這個班的就繼續用
+  if (shared.auth.currentUser?.email === classEmail(code)) return shared;
+  return fbApp('cs-' + code);
+}
+
+/* ---------- 救援碼：忘記老師密碼時用來重設 ----------
+ * 雲端只放加密過的資料：救援碼 → 解開鑰匙 K → 解開老師密碼；文件代碼是雜湊，猜不到
+ */
+const RC_ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const newRescueCode = () => [...crypto.getRandomValues(new Uint8Array(12))].map((x) => RC_ALPHA[x % 32]).join('').match(/.{4}/g).join('-');
+const normRescue = (x) => String(x || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+const b64 = (u8) => btoa(String.fromCharCode(...new Uint8Array(u8)));
+const unb64 = (str) => Uint8Array.from(atob(str), (c) => c.charCodeAt(0));
+async function rescueDocId(code, norm) {
+  const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`classseat-rescue:${code}:${norm}`));
+  return [...new Uint8Array(h)].map((x) => x.toString(16).padStart(2, '0')).join('');
+}
+async function rescueWrapKey(norm, salt) {
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(norm), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: 150000, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+const aesKey = (raw) => crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
+async function aesEnc(key, bytes) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, bytes));
+  const out = new Uint8Array(12 + ct.length); out.set(iv); out.set(ct, 12);
+  return b64(out);
+}
+async function aesDec(key, str) {
+  const u = unb64(str);
+  return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: u.slice(0, 12) }, key, u.slice(12)));
+}
+/** 產生新的救援碼（舊的會失效），回傳救援碼 */
+async function makeRescue(db, classRef, uid, code, pass) {
+  const rc = newRescueCode();
+  const norm = normRescue(rc);
+  const id = await rescueDocId(code, norm);
+  const K = crypto.getRandomValues(new Uint8Array(32));
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const old = (await classRef.get()).data()?.rescue?.id;
+  await db.collection(FB_RESCUE).doc(id).set({
+    owner: uid, code, salt: b64(salt), createdAt: Date.now(),
+    wrapped: await aesEnc(await rescueWrapKey(norm, salt), K),
+    encPass: await aesEnc(await aesKey(K), new TextEncoder().encode(pass)),
+  });
+  const at = Date.now();
+  await classRef.update({ rescue: { id, k: b64(K), at } });
+  if (old && old !== id) await db.collection(FB_RESCUE).doc(old).delete().catch(() => {});
+  return { rescueCode: rc, rescueAt: at };
 }
 const fbErr = (e) => {
   const c = e?.code || '';
@@ -2084,8 +2154,9 @@ const randomId = () => [...crypto.getRandomValues(new Uint8Array(24))].map((x) =
  */
 async function cloudCall(action, p = {}) {
   try {
-    const { auth, db, FieldValue, Timestamp, Persistence } = await fbInit();
     const code = String(p.code || '').toLowerCase();
+    const fx = await fbInit(p.token && p.token !== 'fb' ? '' : code);
+    const { auth, db, Timestamp, Persistence } = fx;
     const classRef = db.collection(FB_CLASSES).doc(code);
     const me = auth.currentUser;
     const isMe = () => me && me.email === classEmail(code);
@@ -2112,16 +2183,41 @@ async function cloudCall(action, p = {}) {
         const cred = await auth.createUserWithEmailAndPassword(classEmail(code), p.pass);
         const now = Date.now();
         await classRef.set({ owner: cred.user.uid, name: p.name || '', data: p.data, updatedAt: now, passwdAt: 0 });
-        return { ok: true, token: 'fb', updatedAt: now };
+        let rescue = {};
+        try { rescue = await makeRescue(db, classRef, cred.user.uid, code, p.pass); } catch { /* 之後可以在雲端視窗再產生 */ }
+        return { ok: true, token: 'fb', updatedAt: now, ...rescue };
       }
       await auth.signInWithEmailAndPassword(classEmail(code), p.pass);
-      const r = await loadClass(classRef, code);
+      const r = await loadClass(fx, classRef, code);
       return { ...r, token: 'fb' };
+    }
+
+    // ---- 忘記密碼：用救援碼重設（不需要登入）
+    if (action === 'rescue') {
+      const norm = normRescue(p.rescue);
+      const ref = db.collection(FB_RESCUE).doc(await rescueDocId(code, norm));
+      let d;
+      try { d = await ref.get(); } catch (e) { if (/permission/.test(e.code)) return { ok: false, error: 'badrescue' }; throw e; }
+      if (!d.exists || d.data().code !== code) return { ok: false, error: 'badrescue' };
+      let K, oldPass;
+      try {
+        K = await aesDec(await rescueWrapKey(norm, unb64(d.data().salt)), d.data().wrapped);
+        oldPass = new TextDecoder().decode(await aesDec(await aesKey(K), d.data().encPass));
+      } catch { return { ok: false, error: 'badrescue' }; }
+      await auth.setPersistence(p.remember ? Persistence.LOCAL : Persistence.SESSION);
+      try { await auth.signInWithEmailAndPassword(classEmail(code), oldPass); } catch (e) { return { ok: false, error: /too-many/.test(e.code) ? 'locked' : 'rescuestale' }; }
+      await auth.currentUser.updatePassword(p.newPass);
+      await ref.update({ encPass: await aesEnc(await aesKey(K), new TextEncoder().encode(p.newPass)) });
+      const now = Date.now();
+      await classRef.update({ passwdAt: now });
+      await revokeDraws(db, auth.currentUser.uid, code);
+      const r = await loadClass(fx, classRef, code);
+      return { ...r, token: 'fb', loginAt: now };
     }
 
     if (!isMe()) return { ok: false, error: 'session' };
     if (action === 'load') {
-      const r = await loadClass(classRef, code);
+      const r = await loadClass(fx, classRef, code);
       if (r.ok && r.passwdAt > (p.loginAt || 0)) { await auth.signOut(); return { ok: false, error: 'session' }; }
       return r;
     }
@@ -2150,10 +2246,19 @@ async function cloudCall(action, p = {}) {
       await me.updatePassword(p.newPass);
       const now = Date.now();
       await classRef.update({ passwdAt: now });
+      // 救援碼跟著換成新密碼（救援碼本身不變）
+      const rs = (await classRef.get()).data()?.rescue;
+      if (rs?.id && rs.k) await db.collection(FB_RESCUE).doc(rs.id).update({ encPass: await aesEnc(await aesKey(unb64(rs.k)), new TextEncoder().encode(p.newPass)) }).catch(() => {});
       await revokeDraws(db, me.uid, code);
       return { ok: true, loginAt: now };
     }
     if (action === 'logout') { await auth.signOut(); return { ok: true }; }
+    if (action === 'rescuenew') {
+      try {
+        await me.reauthenticateWithCredential(firebase.auth.EmailAuthProvider.credential(me.email, p.pass));
+      } catch (e) { return { ok: false, error: /too-many/.test(e.code) ? 'locked' : 'wrongpass' }; }
+      return { ok: true, ...(await makeRescue(db, classRef, me.uid, code, p.pass)) };
+    }
     if (action === 'drawlink') {
       const hours = Math.min(168, Math.max(1, Number(p.hours) || 24));
       const id = randomId();
@@ -2174,11 +2279,11 @@ async function cloudCall(action, p = {}) {
 }
 
 /** 讀班級；如果學校的抽籤連結有新的抽籤結果，先合併回班級 */
-async function loadClass(classRef, code) {
-  const { auth, db } = fb;
+async function loadClass({ auth, db }, classRef, code) {
   const d = await classRef.get();
   if (!d.exists) return { ok: false, error: 'notfound' };
   let { data, updatedAt, name, passwdAt } = d.data();
+  const rescueAt = d.data().rescue?.at || 0;
   const draws = await db.collection(FB_DRAWS).where('owner', '==', auth.currentUser.uid).where('code', '==', code).get();
   const fresh = draws.docs.map((x) => ({ ref: x.ref, ...x.data() }))
     .filter((x) => (x.kioskAt || 0) > (x.mergedAt || 0))
@@ -2189,7 +2294,7 @@ async function loadClass(classRef, code) {
     await fresh.ref.update({ mergedAt: fresh.kioskAt });
     data = fresh.data; updatedAt = t;
   }
-  return { ok: true, data, updatedAt, name, passwdAt: passwdAt || 0, merged: !!fresh };
+  return { ok: true, data, updatedAt, name, passwdAt: passwdAt || 0, merged: !!fresh, rescueAt };
 }
 
 async function revokeDraws(db, uid, code) {
@@ -2292,6 +2397,7 @@ async function cloudPull({ quiet = false } = {}) {
   try {
     const r = await cloudCall('load', { code: sess.code, token: sess.token, loginAt: sess.loginAt });
     if (!r.ok) { if (r.error === 'session') sessionExpired(); else setCloudStatus(r.error === 'offline' ? 'offline' : 'error', cloudErrText(r)); return; }
+    if (r.rescueAt !== undefined && sess.rescueAt !== r.rescueAt) { sess.rescueAt = r.rescueAt; setSession(sess); }
     const localDirty = hashStr(JSON.stringify(state)) !== sess.syncedHash;
     if (r.updatedAt > (sess.updatedAt || 0)) {
       if (localDirty) { setCloudStatus('conflict'); openConflict(r.updatedAt, r.data); return; }
@@ -2348,12 +2454,93 @@ async function resolveConflict(useCloud) {
 }
 
 /* ---------- 雲端視窗 ---------- */
-function renderCloudDialog(welcome = false) {
+/** 登入另一個班之前，把目前的班收進「其他班級」（不登出，之後可以直接切回來） */
+async function stashCurrent(nextCode) {
+  const cur = cloud.session;
+  const others = getOthers();
+  delete others[nextCode];
+  if (cur && !cur.kiosk && !cur.expired && cur.code !== nextCode) {
+    clearTimeout(saveTimer); saveTimer = null;
+    try { localStorage.setItem(classKey(cur.code), JSON.stringify(state)); } catch { /* ignore */ }
+    if (hashStr(JSON.stringify(state)) !== cur.syncedHash) { clearTimeout(cloud.timer); cloud.timer = null; await cloudSave(); }
+    others[cur.code] = cloud.session;
+  }
+  setOthers(others);
+}
+
+/** 切換到這台已經登入過的另一個班級 */
+async function switchClass(code, { quietStash = false } = {}) {
+  const others = getOthers();
+  const target = others[code];
+  if (!target) return;
+  if (!quietStash) await stashCurrent(code);
+  else { delete others[code]; setOthers(others); }
+  const left = getOthers(); delete left[code]; setOthers(left);
+  cloud.session = target;
+  setSession(target);
+  const local = load();
+  state = local || defaultState();
+  if (!local) { target.updatedAt = 0; target.syncedHash = hashStr(JSON.stringify(state)); setSession(target); }
+  ui.history = []; ui.selected = null; ui.selSeat = null; ui.poolPick = null;
+  $('#className').value = state.className || '';
+  ensureSeating();
+  showTab(state.tab === 'seats' ? 'seats' : 'students');
+  setCloudStatus('idle');
+  renderClassSwitch();
+  if ($('#cloudDialog').open) $('#cloudDialog').close();
+  toast(`已切換到 ${code}`);
+  await cloudPull({ quiet: true });
+}
+
+/** 在這台登出某個「其他班級」 */
+async function forgetClass(code) {
+  const others = getOthers();
+  if (!others[code]) return;
+  if (!confirm(`在這台登出 ${code}？（雲端資料不會刪掉）`)) return;
+  try { const f = await fbInit(code); await f.auth.signOut(); } catch { /* ignore */ }
+  try { localStorage.removeItem(classKey(code)); } catch { /* ignore */ }
+  delete others[code];
+  setOthers(others);
+  renderClassSwitch();
+}
+
+/** 右上角的快速切換（登入兩個班以上才出現） */
+function renderClassSwitch() {
+  const sel = $('#classSwitch');
+  if (!sel) return;
+  const sess = cloud.session;
+  const others = Object.keys(getOthers()).filter((c) => c !== sess?.code);
+  sel.hidden = !sess || sess.kiosk || !others.length;
+  if (sel.hidden) return;
+  sel.innerHTML = `<option value="">${esc(sess.code)}</option>${others.map((c) => `<option value="${esc(c)}">切換到 ${esc(c)}</option>`).join('')}<option value="+">＋ 其他班級…</option>`;
+  sel.value = '';
+}
+
+/** 雲端視窗；mode：'welcome' 第一次打開、'add' 再登入／建立另一個班級 */
+function renderCloudDialog(mode = '') {
   const sess = cloud.session;
   let html = '';
   $('#cloudBody').after($('#cloudMsg'));
-  cloud.welcome = welcome && !sess;
-  if (cloud.welcome) {
+  cloud.welcome = mode === 'welcome' && !sess;
+  const others = Object.keys(getOthers()).filter((c) => c !== sess?.code);
+  const forgot = `<details class="cl-forgot"><summary>忘記老師密碼？用救援碼重設</summary>
+      <div class="cl-form">
+        <label>班級代碼<input type="text" id="rsCode" maxlength="20" autocomplete="username"></label>
+        <label>救援碼<input type="text" id="rsRescue" placeholder="XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters"></label>
+        <label>新的老師密碼<input type="password" id="rsPass" placeholder="至少 6 個字" autocomplete="new-password"></label>
+        <label>確認新密碼<input type="password" id="rsPass2" autocomplete="new-password"></label>
+      </div>
+      <div class="tf-row"><button class="btn" data-cl="rescue">重設密碼並登入</button></div>
+      <p class="hint">救援碼是建立班級時出現的那串字。沒有救援碼的話，請找管理 Firebase 的老師協助。重設後，其他裝置要用新密碼重新登入。</p>
+    </details>`;
+  if (cloud.showRescue) {
+    const { code, rc } = cloud.showRescue;
+    html = `<div class="cl-box ok">✓ 班級 <b>${esc(code)}</b> 已經可以用了</div>
+      <h3 class="sub">🔑 你的救援碼</h3>
+      <div class="rescue-code" id="rescueCode">${esc(rc)}</div>
+      <p class="hint"><b>忘記老師密碼時，要靠它重設。</b>這組碼只會顯示這一次，請<b>截圖</b>或抄下來，收在自己的地方，不要給學生看。</p>
+      <div class="tf-row"><button class="btn" data-cl="rescuecopy">複製救援碼</button><button class="btn primary" data-cl="rescuedone">我存好了</button></div>`;
+  } else if (mode === 'welcome' && !sess) {
     html = `<div class="cl-box ok"><b>👋 歡迎使用！</b>先幫你們班建立一個雲端班級，之後在任何電腦、手機登入都是同一份資料。每個班級各自獨立，不會看到或改到別班的資料。</div>
       <div class="cl-form">
         <label>班級代碼<input type="text" id="clCode" placeholder="自己取，例如 302、class3b" autocomplete="username" maxlength="20"></label>
@@ -2368,8 +2555,8 @@ function renderCloudDialog(welcome = false) {
       <div class="tf-row"><button class="btn" data-cl="login">登入</button></div>
       <h3 class="sub">先試用看看</h3>
       <div class="tf-row"><button class="btn small" data-cl="skip">先不用雲端（資料只存在這台）</button></div>
-      <p class="hint">之後隨時可以按左上角「☁️ 雲端」建立班級。</p>`;
-  } else if (sess && !sess.expired) {
+      <p class="hint">之後隨時可以按左上角「☁️ 雲端」建立班級。</p>${forgot}`;
+  } else if (mode !== 'add' && sess && !sess.expired) {
     html = `<div class="cl-box ok">
         <div>目前登入：<b>${esc(sess.code)}</b>${state.className ? `（${esc(state.className)}）` : ''}</div>
         <div class="hint">${cloud.status === 'ok' ? `✓ 已同步${sess.updatedAt ? '（' + fmtTime(sess.updatedAt) + '）' : ''}` : esc(renderStatusText())}</div>
@@ -2385,11 +2572,18 @@ function renderCloudDialog(welcome = false) {
       <div class="cl-form"><input type="password" id="clOldPass" placeholder="目前的密碼" autocomplete="current-password">
         <div class="tf-row"><input type="password" id="clNewPass" placeholder="新密碼（至少 6 個字）" autocomplete="new-password"><button class="btn" data-cl="passwd">更改</button></div></div>
       <p class="hint">改密碼後，其他已登入的裝置和所有抽籤連結都會失效，要用新密碼重新登入。</p>
-      <h3 class="sub">切換班級／登出</h3>
-      <div class="tf-row"><button class="btn" data-cl="logout">登出</button><button class="btn danger-text" data-cl="logout-clear">登出並清除這台的資料</button></div>
+      <h3 class="sub">🔑 救援碼（忘記密碼時用）</h3>
+      ${sess.rescueAt ? `<p class="hint">✓ 已經有救援碼（${fmtTime(sess.rescueAt)} 產生）。找不到的話可以產生新的，舊的就會失效。</p>` : '<div class="cl-box warn">⚠ 這個班還沒有救援碼。忘記密碼就救不回來，建議現在產生一組。</div>'}
+      <div class="tf-row"><input type="password" id="clRescuePass" placeholder="目前的老師密碼" autocomplete="current-password"><button class="btn${sess.rescueAt ? '' : ' primary'}" data-cl="rescuenew">產生${sess.rescueAt ? '新的' : ''}救援碼</button></div>
+      <h3 class="sub">切換班級</h3>
+      ${others.length ? `<div class="cl-classes">${others.map((c) => `<span class="cl-class"><button class="btn small" data-cl="switch" data-code="${esc(c)}">切換到 ${esc(c)}</button><button class="link-btn" data-cl="forget" data-code="${esc(c)}" title="在這台登出 ${esc(c)}">✕</button></span>`).join('')}</div>` : '<p class="hint">教好幾個班的話，可以在這台再登入其他班級，之後一鍵切換，不用重打密碼。</p>'}
+      <div class="tf-row"><button class="btn" data-cl="add">＋ 登入或建立另一個班級</button></div>
+      <h3 class="sub">登出</h3>
+      <div class="tf-row"><button class="btn" data-cl="logout">登出 ${esc(sess.code)}</button><button class="btn danger-text" data-cl="logout-clear">登出並清除這台的資料</button></div>
       <p class="hint">在學校或別人的電腦用完，建議按「登出並清除這台的資料」。資料都還在雲端。</p>`;
   } else {
-    html = `${sess?.expired ? `<div class="cl-box warn">⚠ ${CLOUD_ERR.session}</div>` : ''}<p class="hint">用「班級代碼＋老師密碼」登入，資料會存在雲端，任何電腦、手機都能打開同一個班。</p>
+    const adding = mode === 'add' && sess && !sess.expired;
+    html = `${sess?.expired ? `<div class="cl-box warn">⚠ ${CLOUD_ERR.session}</div>` : ''}${adding ? `<div class="cl-box ok">目前的班級 <b>${esc(sess.code)}</b> 會保留，之後可以一鍵切回來。</div><div class="tf-row"><button class="btn small" data-cl="back">← 回到 ${esc(sess.code)}</button></div>` : ''}<p class="hint">用「班級代碼＋老師密碼」登入，資料會存在雲端，任何電腦、手機都能打開同一個班。</p>
       <div class="cl-form">
         <label>班級代碼<input type="text" id="clCode" placeholder="例如 302" autocomplete="username" maxlength="20"></label>
         <label>老師密碼<input type="password" id="clPass" placeholder="至少 6 個字" autocomplete="current-password"></label>
@@ -2399,14 +2593,15 @@ function renderCloudDialog(welcome = false) {
       <h3 class="sub">還沒有班級？建立新班級</h3>
       <div class="cl-form">
         <label>確認密碼<input type="password" id="clPass2" placeholder="再輸入一次老師密碼" autocomplete="new-password"></label>
-        <label class="cl-check"><input type="radio" name="clSrc" value="current" checked> 用目前畫面上的資料建立</label>
-        <label class="cl-check"><input type="radio" name="clSrc" value="blank"> 建立空白的新班級</label>
+        <label class="cl-check"><input type="radio" name="clSrc" value="current" ${adding ? '' : 'checked'}> 用目前畫面上的資料建立</label>
+        <label class="cl-check"><input type="radio" name="clSrc" value="blank" ${adding ? 'checked' : ''}> 建立空白的新班級</label>
       </div>
       <div class="tf-row"><button class="btn" data-cl="create">建立新班級</button></div>
-      <p class="hint">班級代碼由你自己決定（英文字母或數字，例如 302、class3b），之後在其他電腦用同一組代碼和密碼登入。</p>`;
+      <p class="hint">班級代碼由你自己決定（英文字母或數字，例如 302、class3b），之後在其他電腦用同一組代碼和密碼登入。</p>${forgot}`;
   }
   $('#cloudBody').innerHTML = html;
   $('#cloudMsg').textContent = '';
+  renderClassSwitch();
 }
 
 const renderStatusText = () => ({ saving: '同步中…', offline: '⚠ 目前離線，連上網路後會自動同步', conflict: '⚠ 有衝突，請選擇要用哪一份', error: '⚠ ' + (cloud.msg || '還沒同步') }[cloud.status] || '');
@@ -2427,6 +2622,17 @@ async function cloudAction(act) {
     $('#cloudDialog').close();
     return;
   }
+  if (act === 'add') { renderCloudDialog('add'); return; }
+  if (act === 'back') { renderCloudDialog(); return; }
+  if (act === 'rescuedone') { cloud.showRescue = null; $('#cloudDialog').close(); return; }
+  if (act === 'rescuecopy') {
+    let ok = false;
+    try { await navigator.clipboard.writeText(cloud.showRescue?.rc || ''); ok = true; } catch { /* ignore */ }
+    cloudMsg(ok ? '✓ 已複製，記得貼到自己的地方存好' : '請直接截圖', !ok);
+    return;
+  }
+  if (act === 'switch') { await switchClass(cloud.lastBtn?.dataset.code); return; }
+  if (act === 'forget') { await forgetClass(cloud.lastBtn?.dataset.code); renderCloudDialog(); return; }
   try {
     if (act === 'login' || act === 'create') {
       const code = val('#clCode').toLowerCase(), pass = $('#clPass').value;
@@ -2450,10 +2656,10 @@ async function cloudAction(act) {
           openConflict(r.updatedAt, r.data);
           return;
         }
-        if (old && old.code !== code) { try { localStorage.removeItem(classKey(old.code)); } catch { /* ignore */ } }
-        cloud.session = { url, code, token: r.token, remember, loginAt: Date.now(), updatedAt: r.updatedAt, syncedHash: '' };
+        await stashCurrent(code);
+        cloud.session = { url, code, token: r.token, remember, loginAt: Date.now(), updatedAt: r.updatedAt, syncedHash: '', rescueAt: r.rescueAt || 0 };
         applyCloudState(data, r.updatedAt);
-        toast(`已登入 ${code}`);
+        toast(r.rescueAt ? `已登入 ${code}` : `已登入 ${code}。這個班還沒有救援碼，建議到「☁️ 雲端」產生一組`, r.rescueAt ? 2200 : 5000);
       } else {
         const src = $('input[name="clSrc"]:checked')?.value || 'current';
         const newState = src === 'blank' ? defaultState() : JSON.parse(JSON.stringify(state));
@@ -2463,11 +2669,44 @@ async function cloudAction(act) {
         state = keep;
         const r = await cloudCall('create', { code, pass, remember, name: newState.className || '', data });
         if (!r.ok) { cloudMsg(cloudErrText(r)); return; }
-        cloud.session = { url, code, token: r.token, remember, loginAt: Date.now(), updatedAt: r.updatedAt, syncedHash: '' };
+        await stashCurrent(code);
+        cloud.session = { url, code, token: r.token, remember, loginAt: Date.now(), updatedAt: r.updatedAt, syncedHash: '', rescueAt: r.rescueAt || 0 };
         applyCloudState(normalize(newState), r.updatedAt);
         toast(`已建立班級 ${code}，之後會自動存到雲端`);
+        if (r.rescueCode) { cloud.showRescue = { code, rc: r.rescueCode }; renderCloudDialog(); return; }
       }
       $('#cloudDialog').close();
+      return;
+    }
+    if (act === 'rescue') {
+      const code = val('#rsCode').toLowerCase(), rc = val('#rsRescue'), np = $('#rsPass').value;
+      if (!CODE_RE.test(code)) { cloudMsg(CLOUD_ERR.code); return; }
+      if (normRescue(rc).length !== 12) { cloudMsg('救援碼是 12 個英文字母和數字（例如 ABCD-EFGH-JK23）'); return; }
+      if (np.length < 6) { cloudMsg('新密碼至少 6 個字'); return; }
+      if (np !== $('#rsPass2').value) { cloudMsg('兩次輸入的新密碼不一樣'); return; }
+      cloudMsg('重設中…', false);
+      const r = await cloudCall('rescue', { code, rescue: rc, newPass: np, remember: true });
+      if (!r.ok) { cloudMsg(cloudErrText(r)); return; }
+      const data = normalize(await readDataCode(r.data));
+      if (!data) { cloudMsg('雲端資料格式不正確'); return; }
+      await stashCurrent(code);
+      cloud.session = { url: '', code, token: r.token, remember: true, loginAt: r.loginAt + 1, updatedAt: r.updatedAt, syncedHash: '', rescueAt: r.rescueAt || 0 };
+      applyCloudState(data, r.updatedAt);
+      $('#cloudDialog').close();
+      toast(`✓ 已重設 ${code} 的老師密碼並登入。其他裝置要用新密碼重新登入`, 5000);
+      return;
+    }
+    if (act === 'rescuenew') {
+      const pass = $('#clRescuePass').value;
+      if (!pass) { cloudMsg('請輸入目前的老師密碼'); return; }
+      if (cloud.session.rescueAt && !confirm('產生新的救援碼之後，舊的救援碼就不能用了。確定嗎？')) return;
+      cloudMsg('產生中…', false);
+      const sess = cloud.session;
+      const r = await cloudCall('rescuenew', { code: sess.code, token: sess.token, pass });
+      if (!r.ok) { cloudMsg(r.error === 'wrongpass' ? '目前的密碼不對' : cloudErrText(r)); return; }
+      sess.rescueAt = r.rescueAt; setSession(sess);
+      cloud.showRescue = { code: sess.code, rc: r.rescueCode };
+      renderCloudDialog();
       return;
     }
     if (act === 'drawlink') {
@@ -2519,9 +2758,19 @@ async function cloudAction(act) {
       }
       if (act === 'logout-clear') { try { localStorage.removeItem(classKey(sess.code)); } catch { /* ignore */ } }
       if (!sess.expired) await cloudCall('logout', { code: sess.code, token: sess.token }).catch(() => {});
+      clearTimeout(cloud.timer); cloud.timer = null;
+      // 這台還有登入其他班級：切到其中一個
+      const others = getOthers();
+      const next = Object.keys(others).find((c) => c !== sess.code);
+      if (next) {
+        cloud.session = null;
+        await switchClass(next, { quietStash: true });
+        $('#cloudDialog').close();
+        toast(`已登出 ${sess.code}，切換到 ${next}`);
+        return;
+      }
       cloud.session = null;
       setSession(null);
-      clearTimeout(cloud.timer); cloud.timer = null;
       state = load() || defaultState();
       ui.history = []; ui.selected = null; ui.selSeat = null;
       $('#className').value = state.className || '';
@@ -2541,8 +2790,9 @@ function bindCloud() {
   $('#cloudClose').addEventListener('click', () => $('#cloudDialog').close());
   // 新老師的歡迎視窗關掉後（建立班級、先試用或按關閉），接著打開使用說明；登入舊班級的就不用
   $('#cloudDialog').addEventListener('close', () => {
-    if (!cloud.welcome) return;
+    if (!cloud.welcome) { cloud.showRescue = null; return; }
     cloud.welcome = false;
+    cloud.showRescue = null;
     if (cloud.lastBtn?.dataset.cl === 'login' && cloud.session) return;
     $('#guideDialog').showModal();
   });
@@ -2571,7 +2821,13 @@ function bindCloud() {
   renderCloudButton();
   if (cloud.session?.kiosk) startKiosk();
   else if (cloud.session && cloudEnabled()) cloudPull({ quiet: true });
-  else if (FIRST_VISIT && cloudEnabled()) { renderCloudDialog(true); $('#cloudDialog').showModal(); }
+  else if (FIRST_VISIT && cloudEnabled()) { renderCloudDialog('welcome'); $('#cloudDialog').showModal(); }
+  renderClassSwitch();
+  $('#classSwitch').addEventListener('change', (e) => {
+    const v = e.target.value;
+    e.target.value = '';
+    if (v === '+') { renderCloudDialog('add'); $('#cloudDialog').showModal(); } else if (v) switchClass(v);
+  });
   // 開著的時候每 5 分鐘看一次其他裝置有沒有新資料
   setInterval(() => { if (document.visibilityState === 'visible' && cloud.session && !cloud.session.kiosk && Date.now() - (cloud.pulledAt || 0) >= SYNC_MS - 1000) cloudPull({ quiet: false }); }, 60000);
 }
@@ -2687,6 +2943,93 @@ function downloadCanvas(cv, filename) {
 
 function downloadSeatImage() {
   downloadCanvas(drawSeatCanvas(state.seats, state.assign), `${state.className || '班級'}-座位表.png`);
+}
+
+/* ---------- 📄 PDF：座位表＋學生名單 ---------- */
+/** 學生名單畫成一張 A4 直式的圖（只有座號、姓名、性別、組別、座位，不含任何條件或老師的安排） */
+function drawRosterCanvas() {
+  const W = 1240, H = 1754; // A4 150dpi
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d');
+  const font = getComputedStyle(document.body).fontFamily;
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#1f2328'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = `700 44px ${font}`;
+  ctx.fillText(`${state.className || ''} 學生名單`.trim(), W / 2, 90);
+  ctx.font = `24px ${font}`; ctx.fillStyle = '#6b7280';
+  ctx.fillText(fmtTime(Date.now()), W / 2, 140);
+  const order = seatOrder(state.seats);
+  const seatOf = {};
+  order.forEach((x, i) => { const sid = state.assign[x.id]; if (sid) seatOf[sid] = { no: i + 1, g: groupNum(x.group) }; });
+  const list = sortedStudents();
+  const anyGroup = Object.values(seatOf).some((x) => x.g);
+  const cols = list.length > 22 ? 2 : 1;
+  const per = Math.ceil(list.length / cols);
+  const top = 200, rowH = Math.min(64, Math.floor((H - top - 90) / (per + 1)));
+  const colW = cols === 2 ? 540 : 760;
+  const gap = cols === 2 ? 60 : 0;
+  const left0 = (W - (colW * cols + gap * (cols - 1))) / 2;
+  const fields = anyGroup ? [['座號', 0.18], ['姓名', 0.44], ['性別', 0.16], ['組別', 0.22]] : [['座號', 0.22], ['姓名', 0.56], ['性別', 0.22]];
+  for (let c = 0; c < cols; c++) {
+    const left = left0 + c * (colW + gap);
+    const rows = list.slice(c * per, (c + 1) * per);
+    if (!rows.length) continue;
+    // 表頭
+    ctx.fillStyle = '#e8f1ef'; ctx.fillRect(left, top, colW, rowH);
+    ctx.fillStyle = '#1f2328'; ctx.font = `700 ${Math.round(rowH * 0.42)}px ${font}`;
+    let x = left;
+    for (const [label, w] of fields) { ctx.fillText(label, x + (colW * w) / 2, top + rowH / 2); x += colW * w; }
+    rows.forEach((st, r) => {
+      const y = top + rowH * (r + 1);
+      if (r % 2) { ctx.fillStyle = '#fafaf7'; ctx.fillRect(left, y, colW, rowH); }
+      const where = seatOf[st.id];
+      const vals = [String(st.no), st.name, st.gender === 'M' ? '男' : st.gender === 'F' ? '女' : '', ...(anyGroup ? [where?.g ? `第 ${where.g} 組` : (where ? '' : '還沒排')] : [])];
+      let xx = left;
+      vals.forEach((v, k) => {
+        const w = colW * fields[k][1];
+        let fs = Math.round(rowH * (k === 1 ? 0.48 : 0.4));
+        ctx.font = `${k === 1 ? 700 : 400} ${fs}px ${font}`;
+        while (fs > 12 && ctx.measureText(v).width > w - 12) { fs--; ctx.font = `${k === 1 ? 700 : 400} ${fs}px ${font}`; }
+        ctx.fillStyle = k === 2 && st.gender ? (st.gender === 'M' ? '#2f6fb0' : '#b8437a') : '#1f2328';
+        ctx.fillText(v, xx + w / 2, y + rowH / 2);
+        xx += w;
+      });
+    });
+    ctx.strokeStyle = '#cfd8d5'; ctx.lineWidth = 2;
+    ctx.strokeRect(left, top, colW, rowH * (rows.length + 1));
+    ctx.lineWidth = 1;
+    for (let r = 1; r <= rows.length; r++) { ctx.beginPath(); ctx.moveTo(left, top + rowH * r); ctx.lineTo(left + colW, top + rowH * r); ctx.stroke(); }
+  }
+  return cv;
+}
+
+let jsPdfLoading = null;
+async function exportPDF() {
+  toast('正在製作 PDF…');
+  try {
+    if (!window.jspdf) {
+      jsPdfLoading ||= loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+      await jsPdfLoading;
+    }
+    const { jsPDF } = window.jspdf;
+    const seat = drawSeatCanvas(state.seats, state.assign);
+    const land = seat.width >= seat.height;
+    const doc = new jsPDF({ orientation: land ? 'landscape' : 'portrait', unit: 'mm', format: 'a4' });
+    const fit = (cv, pw, ph, m = 10) => {
+      const r = Math.min((pw - m * 2) / cv.width, (ph - m * 2) / cv.height);
+      const w = cv.width * r, h = cv.height * r;
+      return [(pw - w) / 2, (ph - h) / 2, w, h];
+    };
+    doc.addImage(seat.toDataURL('image/png'), 'PNG', ...fit(seat, land ? 297 : 210, land ? 210 : 297), undefined, 'FAST');
+    doc.addPage('a4', 'portrait');
+    const roster = drawRosterCanvas();
+    doc.addImage(roster.toDataURL('image/png'), 'PNG', ...fit(roster, 210, 297, 0), undefined, 'FAST');
+    doc.save(`${state.className || '班級'}-座位表與名單.pdf`);
+    toast('✓ PDF 已下載（第 1 頁座位表、第 2 頁名單）', 3500);
+  } catch {
+    toast('PDF 做不出來（可能是網路擋住了），可以改按「🖨 列印」→ 目的地選「另存為 PDF」', 6000);
+  }
 }
 
 /* ---------- 📚 紀錄／方案 ---------- */
@@ -3176,6 +3519,7 @@ function bindSeatsPanel() {
   $('#drawEnd').addEventListener('click', endDraw);
   $('#drawRemember').addEventListener('click', () => { rememberSeating(); endDraw(); });
   $('#btnImage').addEventListener('click', downloadSeatImage);
+  $('#btnPdf').addEventListener('click', exportPDF);
   $('#layoutOpts').addEventListener('click', (e) => {
     if (e.target.closest('[data-save-custom]')) openMapDialog('copy');
     if (e.target.closest('[data-auto-group]')) autoGroup();
