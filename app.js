@@ -1990,7 +1990,8 @@ function pickSeat(seatId) {
   // 自己原本被內定在別的位子：那個位子空出來
   for (const k of Object.keys(fx)) if (fx[k] === sid && k !== seatId) delete fx[k];
   const displaced = [];
-  if (fx[seatId] && fx[seatId] !== sid) displaced.push(fx[seatId]);
+  const origSeat = {};
+  if (fx[seatId] && fx[seatId] !== sid) { displaced.push(fx[seatId]); origSeat[fx[seatId]] = seatId; }
   delete fx[seatId];
   // 「不能坐隔壁」的對象如果被內定在旁邊、還沒揭曉，也一起改到備案位置
   const geo = geometry();
@@ -1999,11 +2000,24 @@ function pickSeat(seatId) {
     const other = x === sid ? y : y === sid ? x : null;
     if (!other || d.done.has(other)) continue;
     const k = Object.keys(fx).find((kk) => fx[kk] === other);
-    if (k && geo.adj[idxOf[k] * geo.N + idxOf[seatId]]) { delete fx[k]; displaced.push(other); }
+    if (k && geo.adj[idxOf[k] * geo.N + idxOf[seatId]]) { delete fx[k]; displaced.push(other); origSeat[other] = k; }
   }
   for (const who of displaced) {
-    const backup = (state.secret.backup?.[who] || []).find((k) => k !== seatId && !fx[k] && !takenByDone(k));
-    if (backup) fx[backup] = who;
+    // 老師有設備案位置就用備案；沒有就自動找「離原本內定位子最近」的空位，盡量留在老師想要的區域
+    let to = (state.secret.backup?.[who] || []).find((k) => k !== seatId && !fx[k] && !takenByDone(k));
+    if (!to) {
+      const o = state.seats[idxOf[origSeat[who]]];
+      const partners = state.secret.apart.filter(([x, y]) => x === who || y === who).map(([x, y]) => (x === who ? y : x));
+      const partnerSeats = state.seats.map((x, i) => [x, i]).filter(([x]) => partners.includes(state.assign[x.id]) && (d.done.has(state.assign[x.id]) || x.id === seatId));
+      const ok = state.seats.map((x, i) => ({ x, i })).filter(({ x, i }) => x.id !== seatId && !fx[x.id] && !takenByDone(x.id)
+        && !(state.secret.ban[x.id] || []).includes(who)
+        && !partnerSeats.some(([, pi]) => geo.adj[pi * geo.N + i]));
+      if (o && ok.length) {
+        ok.sort((a, b) => Math.hypot(a.x.x - o.x, (a.x.y - o.y) * 1.6) - Math.hypot(b.x.x - o.x, (b.x.y - o.y) * 1.6));
+        to = ok[0].x.id;
+      }
+    }
+    if (to) fx[to] = who;
   }
   // 已揭曉的同學和這次自選的位子固定，其他人照（調整後的）老師設定重新排
   const extra = { [seatId]: sid };
