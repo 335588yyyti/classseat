@@ -915,7 +915,7 @@ function evaluate() {
 }
 
 /* =========================================================
-   畫面：① 學生與條件
+   畫面：① 學生
    ========================================================= */
 
 function renderStudentsPanel() {
@@ -3617,7 +3617,43 @@ function renderChecks(ev) {
   const errs = ev.items.filter((i) => i.level === 'err').length;
   const warns = ev.items.filter((i) => i.level === 'warn').length;
   const head = errs || warns ? `<div class="hint">${errs ? `${errs} 項必須修正` : '沒有違反必要規則'}，${warns} 項建議調整</div>` : '';
-  box.innerHTML = head + ev.items.map((i) => `<div class="check-item ${i.level}">${i.level === 'err' ? '✗ ' : i.level === 'warn' ? '△ ' : ''}${esc(i.text)}</div>`).join('');
+  // 依類別分組，每一類可以隱藏／顯示（記在班級資料裡）
+  const hidden = new Set(state.hiddenChecks || []);
+  const groups = [];
+  for (const it of ev.items) {
+    const c = checkCat(it);
+    let g = groups.find((x) => x.key === c.key);
+    if (!g) groups.push(g = { ...c, items: [] });
+    g.items.push(it);
+  }
+  const order = (g) => (g.items.some((i) => i.level === 'err') ? 0 : g.items.some((i) => i.level === 'warn') ? 1 : 2);
+  groups.sort((a, b) => order(a) - order(b));
+  box.innerHTML = head + groups.map((g) => {
+    const off = hidden.has(g.key);
+    const lv = g.items.some((i) => i.level === 'err') ? 'err' : g.items.some((i) => i.level === 'warn') ? 'warn' : 'info';
+    return `<div class="check-group ${off ? 'off' : ''}">
+      <button class="check-head ${lv}" data-check-toggle="${g.key}" title="${off ? '顯示' : '隱藏'}這一類">${off ? '▸' : '▾'} ${g.label}<span class="check-n">${g.items.length}</span><span class="check-eye">${off ? '顯示' : '隱藏'}</span></button>
+      ${off ? '' : g.items.map((i) => `<div class="check-item ${i.level}">${i.level === 'err' ? '✗ ' : i.level === 'warn' ? '△ ' : ''}${esc(i.text)}</div>`).join('')}
+    </div>`;
+  }).join('');
+}
+
+/** 檢查結果的類別 */
+function checkCat(it) {
+  const t = it.text;
+  if (/^🤫/.test(t)) return { key: 'secret', label: '🤫 老師的安排' };
+  if (/疊在一起/.test(t)) return { key: 'overlap', label: '座位疊在一起' };
+  if (/相鄰位置|在同一組（設定|設定為不可同組/.test(t)) return { key: 'rule', label: '🤝 不可相鄰／不可同組' };
+  if (/盡量同組/.test(t)) return { key: 'prefer', label: '🤝 盡量同組' };
+  if (/男生|女生/.test(t)) return { key: 'gender', label: '⚥ 性別' };
+  if (/近視/.test(t)) return { key: 'myopia', label: '👓 視力' };
+  if (/身高|太高|太矮/.test(t)) return { key: 'height', label: '📏 身高' };
+  if (/同組、這次又同組/.test(t)) return { key: 'prevGroup', label: '👥 換組員' };
+  if (/希望坐/.test(t)) return { key: 'pref', label: '📍 座位偏好' };
+  if (/側|坐過的位子|同一個位子|上次/.test(t)) return { key: 'prev', label: '🔁 換位子／↔ 換邊' };
+  if (/（.+）目前坐|都是「/.test(t)) return { key: 'tag', label: '🏷 自訂條件' };
+  if (/#\d+ (應該|不該)/.test(t)) return { key: 'secret', label: '🤫 老師的安排' };
+  return { key: 'other', label: '其他' };
 }
 
 function renderSelInfo() {
@@ -3901,6 +3937,16 @@ function bindSeatsPanel() {
     }, 30);
   });
   $('#btnClearSeats').addEventListener('click', clearSeatsToPool);
+  $('#checkList').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-check-toggle]');
+    if (!b) return;
+    const k = b.dataset.checkToggle;
+    const set = new Set(state.hiddenChecks || []);
+    if (set.has(k)) set.delete(k); else set.add(k);
+    state.hiddenChecks = [...set];
+    save();
+    renderChecks(evaluate());
+  });
   $('#roomSummary').addEventListener('click', (e) => { if (e.target.closest('[data-fix-overlap]')) separateOverlaps(); });
   $('#btnDelEmpty').addEventListener('click', deleteExtraDesks);
   $('#btnRandom').addEventListener('click', () => { askRememberCurrent(); askClearUsedFixed(); pushHistory(); optimize(false); save(); renderSeatsPanel(); toast('已隨機排座（鎖定的座位不變）'); });
