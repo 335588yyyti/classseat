@@ -1647,24 +1647,14 @@ function renderRoom() {
 
   const seatNoMap = Object.fromEntries(seatOrder(state.seats).map((x, i) => [x.id, i + 1]));
   const preDraw = document.body.classList.contains('big-screen') && !ui.drawing && !ui.revealed;
-  let preAssign = null;
-  if (preDraw && state.prev?.seats) {
-    preAssign = {};
-    for (const [sid, pv] of Object.entries(state.prev.seats)) {
-      const k = prevSeatIndex(pv, state.seats);
-      if (k >= 0 && studentById(sid) && !preAssign[state.seats[k].id]) preAssign[state.seats[k].id] = sid;
-    }
-  }
   for (const seat of state.seats) {
     const v = toView(seat.x, seat.y, b, pad);
     const st = studentById(state.assign[seat.id]);
     const cls = ['desk'];
     const clean = isClean();
     if (preDraw) {
-      // 大屏還沒抽籤：顯示上次記住的座位，沒有紀錄就全部顯示「？」，不會先看到新的結果
-      const ps = studentById(preAssign?.[seat.id]);
-      if (!preAssign) html += st ? `<div class="desk draw-hidden" data-seat="${seat.id}" style="left:${v.x}px;top:${v.y}px"><span class="d-name">？</span></div>` : `<div class="desk empty" data-seat="${seat.id}" style="left:${v.x}px;top:${v.y}px"><span class="d-empty">空位</span></div>`;
-      else html += `<div class="desk ${ps ? (ps.gender ? 'g-' + ps.gender : '') : 'empty'}" data-seat="${seat.id}" style="left:${v.x}px;top:${v.y}px">${ps ? `<span class="d-no">${esc(ps.no)}</span><span class="d-name">${esc(ps.name)}</span>` : '<span class="d-empty">空位</span>'}</div>`;
+      // 大屏還沒抽籤：座位一律顯示「？」，不顯示任何名字，不會先看到結果
+      html += st ? `<div class="desk draw-hidden" data-seat="${seat.id}" style="left:${v.x}px;top:${v.y}px"><span class="d-name">？</span></div>` : `<div class="desk empty" data-seat="${seat.id}" style="left:${v.x}px;top:${v.y}px"><span class="d-empty">空位</span></div>`;
       continue;
     }
     if (ui.drawing && st && !ui.drawing.done.has(st.id)) {
@@ -3076,6 +3066,8 @@ async function startKiosk() {
     applyCloudState(data, r.updatedAt);
     $('#kioskCover').hidden = true;
     setBigScreen(true);
+    // 抽籤連結一打開就是籤筒畫面
+    startDraw();
   } catch {
     kioskMessage('連不上雲端，請確認網路後重新整理');
   }
