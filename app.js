@@ -66,7 +66,7 @@ function defaultState() {
     conditions: {
       myopia: { on: true, weight: 3 },
       height: { on: true, weight: 2 },
-      gender: { on: true, weight: 1 },
+      gender: { on: true, weight: 2 },
       prevSeat: { on: true, weight: 3, n: 1 },
       prevSide: { on: true, weight: 2 },
       prevGroup: { on: true, weight: 2 },
@@ -456,6 +456,7 @@ function geometry(seats = state.seats) {
   const adj = new Uint8Array(N * N);
   const adjPairs = [];
   const rowPairs = [];
+  const colPairs = [];
   const isGroups = state.layout.type === 'groups' || (isTemplate() && seats.some((s) => s.group));
   const groupKeys = [...new Set(seats.map((s) => s.group).filter(Boolean))];
   const groupIdx = seats.map((s) => (s.group ? groupKeys.indexOf(s.group) : -1));
@@ -474,11 +475,12 @@ function geometry(seats = state.seats) {
         adjPairs.push([i, j]);
       }
       if (touch && dy < DESK_H / 2) rowPairs.push([i, j]);
+      else if (touch && dx < DESK_W / 2) colPairs.push([i, j]);
     }
   }
   const sameGroup = (a, b) =>
     (groupIdx[a] >= 0 && groupIdx[a] === groupIdx[b]) || (!isGroups && adj[a * N + b] === 1);
-  return { N, front, side, sideCat, adj, adjPairs, rowPairs, isGroups, groupIdx, groupCount: groupKeys.length, sameGroup };
+  return { N, front, side, sideCat, adj, adjPairs, rowPairs, colPairs, isGroups, groupIdx, groupCount: groupKeys.length, sameGroup };
 }
 
 /* =========================================================
@@ -578,6 +580,15 @@ function buildModel() {
     return t;
   }
 
+  // 性別：男生左右兩旁盡量是女生、前後也盡量不要都是男生（女生旁邊不限制）；隨機排也遵守
+  function genderCost(occ) {
+    if (!wG || !hasBoth) return 0;
+    let t = 0;
+    for (const [a, b] of geo.rowPairs) { const sa = occ[a], sb = occ[b]; if (sa >= 0 && sb >= 0 && gender[sa] === 'M' && gender[sb] === 'M') t += wG * 30; }
+    for (const [a, b] of geo.colPairs) { const sa = occ[a], sb = occ[b]; if (sa >= 0 && sb >= 0 && gender[sa] === 'M' && gender[sb] === 'M') t += wG * 10; }
+    return t;
+  }
+
   // 每一組都要有男有女（不能整組都是男生或都是女生）；隨機排也遵守
   function mixCost(occ) {
     const { isGroups, groupIdx, groupCount } = geo;
@@ -610,14 +621,7 @@ function buildModel() {
     t += hardCost(occ, pos);
     for (const [a, b] of preferGroup) if (!sameGroup(pos[a], pos[b])) t += 150;
 
-    // 性別：男生左右兩旁盡量是女生（女生旁邊不限制）
-    if (wG) {
-      for (const [a, b] of rowPairs) {
-        const sa = occ[a], sb = occ[b];
-        if (sa < 0 || sb < 0) continue;
-        if (gender[sa] === 'M' && gender[sb] === 'M') t += wG * 8;
-      }
-    }
+    t += genderCost(occ);
     if (spreadTags.length) {
       for (const [a, b] of adjPairs) {
         const sa = occ[a], sb = occ[b];
@@ -653,7 +657,7 @@ function buildModel() {
     return t;
   }
 
-  return { geo, idx, cost, secretCost, mixCost, prevCost, hardCost, hasHard: avoidAdj.length + avoidGroup.length > 0, hasPrev, hasSecret: banList.length + apart.length > 0, hasMix: !!(wG && geo.isGroups && geo.groupCount && hasBoth) };
+  return { geo, idx, cost, secretCost, mixCost, prevCost, hardCost, genderCost, hasGender: !!(wG && hasBoth), hasHard: avoidAdj.length + avoidGroup.length > 0, hasPrev, hasSecret: banList.length + apart.length > 0, hasMix: !!(wG && geo.isGroups && geo.groupCount && hasBoth) };
 }
 
 function optimize(useConditions = true, extraFixed = null, fixedOverride = null) {
@@ -712,9 +716,9 @@ function optimize(useConditions = true, extraFixed = null, fixedOverride = null)
     return Math.max(0, t - emptyIdeal) * 30;
   } : () => 0;
   // 完全隨機時只看老師的暗中安排；依條件時兩者都看
-  const costFn = useConditions ? (o, p) => model.cost(o, p) + model.secretCost(o, p) + emptyCost(o) : (o, p) => model.secretCost(o, p) + emptyCost(o) + model.mixCost(o) + model.prevCost(o, p) + model.hardCost(o, p);
+  const costFn = useConditions ? (o, p) => model.cost(o, p) + model.secretCost(o, p) + emptyCost(o) : (o, p) => model.secretCost(o, p) + emptyCost(o) + model.mixCost(o) + model.prevCost(o, p) + model.hardCost(o, p) + model.genderCost(o);
   let best = initial();
-  if ((useConditions || model.hasSecret || model.hasMix || model.hasPrev || model.hasHard || nEmpty > 0) && movable.length > 1) {
+  if ((useConditions || model.hasSecret || model.hasMix || model.hasPrev || model.hasHard || model.hasGender || nEmpty > 0) && movable.length > 1) {
     let bestCost = costFn(best.occ, best.pos);
     const runs = useConditions ? 4 : 3, iters = useConditions ? 16000 : 8000;
     for (let r = 0; r < runs && !(bestCost === 0 && !useConditions); r++) {
@@ -859,6 +863,15 @@ function evaluate() {
         items.push({ level: 'err', text: `有兩個座位疊在一起${hidden ? `，${name(hidden)} 被${top ? ` ${name(top)} ` : '空位'}蓋住了` : ''}。按座位表上方的「🔧 把疊住的座位分開」，或在座位上按右鍵刪除多的座位`, seat: seats[j].id });
         errSeats.add(seats[j].id);
       }
+    }
+  }
+  // 男生坐在一起（左右相鄰）
+  if (state.conditions.gender.on) {
+    const mm = geo.rowPairs.filter(([a, b]) => studentById(state.assign[seats[a].id])?.gender === 'M' && studentById(state.assign[seats[b].id])?.gender === 'M');
+    if (mm.length) {
+      const nm3 = (i) => name(studentById(state.assign[seats[i].id]));
+      items.push({ level: 'warn', text: `男生左右相鄰 ${mm.length} 對：${mm.slice(0, 6).map(([a, b]) => `${nm3(a)}＆${nm3(b)}`).join('、')}${mm.length > 6 ? '…' : ''}` });
+      mm.forEach(([a, b]) => { warnSeats.add(seats[a].id); warnSeats.add(seats[b].id); });
     }
   }
   // 每一組都要有男有女
@@ -1784,7 +1797,7 @@ function renderSecret() {
       <div class="sec-row"><span>怎麼抽</span>${optRow('mode', [['cond', '依條件'], ['random', '完全隨機']])}</div>
       <div class="sec-row"><span>搖籤時間</span>${optRow('speed', [['fast', '短'], ['mid', '普通'], ['slow', '長']])}</div>
       <div class="sec-row"><span>音效</span>${optRow('sound', [['on', '開'], ['off', '關']])}</div>
-      <p class="hint">「依條件」會遵守所有排座條件（身高、視力、偏好…）；「完全隨機」只遵守不可相鄰、不可同組、換位子、每組男女和下面的安排，其他隨機。按「抽籤」後，學生選自己的座號、搖籤筒，就會抽到照這些設定安排好的座位。</p>
+      <p class="hint">「依條件」會遵守所有排座條件（身高、視力、偏好…）；「完全隨機」只遵守不可相鄰、不可同組、換位子、男女相間、每組男女和下面的安排，其他隨機。按「抽籤」後，學生選自己的座號、搖籤筒，就會抽到照這些設定安排好的座位。</p>
     </div>
     ${status}
     <div class="sec-block">
