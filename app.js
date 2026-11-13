@@ -2023,6 +2023,7 @@ function pickSeat(seatId) {
 function renderDrawPad() {
   const d = ui.drawing;
   if (!d) return;
+  $('#drawPad').classList.toggle('many', state.students.length > 30);
   $('#drawPad').innerHTML = sortedStudents().map((st) => {
     const done = d.done.has(st.id);
     return `<button class="pad-no ${done ? 'done' : ''} ${d.current === st.id ? 'sel' : ''}" data-draw-no="${st.id}" ${done || d.busy ? 'disabled' : ''}>
@@ -2140,6 +2141,7 @@ function fromView(vx, vy) {
 }
 
 function canEditDesks() {
+  if (isClean()) return false; // 大屏／抽籤中不能改桌椅，教室也不用多留空白
   return state.mode === 'move' || isTemplate();
 }
 
