@@ -2057,6 +2057,8 @@ function renderDrawPad() {
       <b>${esc(st.no)}</b><small>${esc(st.name)}</small></button>`;
   }).join('');
   const left = state.students.filter((x) => !d.done.has(x.id)).length;
+  // 抽籤連結：全部抽完就記下時間，老師的電腦收到結果時會問要不要記住
+  if (!left && cloud.session?.kiosk && !d.kioskMarked) { d.kioskMarked = true; state.kioskDrawAt = Date.now(); save(); }
   $$('#drawModes [data-dmode]').forEach((b) => b.classList.toggle('on', b.dataset.dmode === d.mode));
   $('#drawShake').hidden = d.mode === 'pick';
   const shakeBtn = $('#drawShake');
@@ -2113,6 +2115,7 @@ function endDraw() {
   const left = state.students.filter((x) => !ui.drawing.done.has(x.id)).length;
   if (left && !confirm(`還有 ${left} 人沒抽，結束後會直接顯示全部座位。確定結束？`)) return;
   const test = ui.drawing.test;
+  if (cloud.session?.kiosk && ui.drawing.done.size && !ui.drawing.kioskMarked) { state.kioskDrawAt = Date.now(); save(); }
   ui.drawing = null;
   ui.revealed = true;
   // 記下這份內定已經用過（下次老師重排時會提醒清空）；老師測試的不算
@@ -2629,6 +2632,25 @@ function applyCloudState(newState, updatedAt) {
   setSession(cloud.session);
   clearTimeout(cloud.timer); cloud.timer = null;
   setCloudStatus('ok');
+  setTimeout(askKioskResult, 300);
+}
+
+/**
+ * 學校用抽籤連結抽完的結果回到這台：問要不要記成「教室現在的座位」
+ * （抽籤連結抽完會在資料裡留下 kioskDrawAt；回答過就記 kioskDrawAckAt，不會一直問）
+ */
+function askKioskResult() {
+  if (!state.kioskDrawAt || cloud.session?.kiosk || ui.drawing) return;
+  if ((state.kioskDrawAckAt || 0) >= state.kioskDrawAt) return;
+  state.kioskDrawAckAt = state.kioskDrawAt;
+  if (sameAsPrev()) { save(); return; }
+  if (state.tab !== 'seats') showTab('seats');
+  if (confirm(`學校抽籤的結果已經回來了（${fmtTime(state.kioskDrawAt)} 抽的）。\n\n要記成「教室現在的座位」嗎？\n下次換位子、換邊、換組員會以它為準。\n\n確定＝記住　取消＝先不要`)) {
+    rememberSeating({ quiet: true });
+  } else {
+    save();
+    toast('之後要記的話，按「📌 記住教室現在的座位」', 4000);
+  }
 }
 
 /** 看看雲端有沒有其他裝置存的新資料 */
@@ -2732,6 +2754,7 @@ async function switchClass(code, { quietStash = false } = {}) {
   if ($('#cloudDialog').open) $('#cloudDialog').close();
   toast(`已切換到 ${code}`);
   await cloudPull({ quiet: true });
+  askKioskResult();
 }
 
 /** 在這台登出某個「其他班級」 */
